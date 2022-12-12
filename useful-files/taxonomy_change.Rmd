@@ -1,0 +1,704 @@
+---
+title: "New Log Model vs. Old Model Exploration"
+author: "Brayden Ross - Senior Data Analyst  \nSlack - @brayden-ross"
+date: "`r Sys.Date()`"
+output:
+  html_document:
+    pdf_document: null
+    theme: lumen
+    toc: yes
+    toc_float: yes
+  pdf_document:
+    toc: yes
+---
+
+```{r,echo = FALSE, warning = FALSE, message = FALSE}
+knitr::opts_chunk$set(echo = FALSE, message = FALSE, warning = FALSE)
+htmltools::img(src = knitr::image_uri("~/SageMaker/efs/content_strategy/brayden_ross/PS_logo_F-01.png"), 
+               alt = 'logo', 
+               align = 'left',
+               style = 'position:relative; top:-5px; right:5px; 
+               padding:10px; width:250px;')
+library(patchwork)
+library(imgpalr)
+set.seed(420)
+palette <- image_pal(file = "~/SageMaker/efs/content_strategy/brayden_ross/PS_logo_F-01.png", n = 4, plot = FALSE)[-2]
+```
+
+<br>
+
+<br>
+
+<br>
+
+```{r, warning = FALSE, message = FALSE}
+new_pred_color <- palette[2]
+old_pred_color <- palette[3]
+source(file.path(Sys.getenv('AUTH_COMP_REPO_PATH'),"/utils/utilities.R"))
+knitr::opts_chunk$set(echo = FALSE, message = FALSE, warning = FALSE)
+options(dplyr.summarise.inform = FALSE)
+options(scipen = 999)
+library(gridExtra)
+library(tidyverse)
+library(dtplyr)
+library(kableExtra)
+library(caret)
+current_model <- readRDS(file.path(Sys.getenv('AUTH_COMP_REPO_PATH'),"/video/video_comp_model/new_ols_model.RDS"))
+new_tax_model <- readRDS(file.path(Sys.getenv('AUTH_COMP_REPO_PATH'),"/video/video_comp_model/new_taxonomy_ols_model.RDS"))
+```
+
+```{r}
+new_test_data <- read.csv('~/SageMaker/efs/content_strategy/brayden_ross/new_testing_data.csv')
+test_data <- read.csv('~/SageMaker/efs/content_strategy/brayden_ross/old_tax_testing_data.csv')
+test_data <- test_data %>%
+  filter(test_data$course_name %in% new_test_data$course_name)
+
+model_data <- read.csv('~/SageMaker/efs/content_strategy/brayden_ross/model_dataset.csv')
+new_test_data$tax_preds <- exp(predict(new_tax_model, new_test_data))
+sub_old_test <- new_test_data %>%
+  select(course_name, published_date, course_age, level_1, level_1_saturation, level_2, level_2_saturation, level_3, level_3_saturation, tax_preds)
+
+test_data$log_preds <- exp(predict(current_model, test_data))
+
+test_data <- test_data %>%
+  left_join(sub_old_test, by = c('course_name', 'published_date', 'course_age')) %>%
+  na.omit()
+upper_limit <- quantile(model_data$view_time_perc,.95)
+lower_limit <- quantile(model_data$view_time_perc,.05)
+
+test_data$log_preds[is.na(test_data$log_preds)] <- lower_limit
+test_data$log_preds <- ifelse(test_data$log_preds >= upper_limit,
+                                         upper_limit, ifelse(test_data$log_preds <= lower_limit,
+                                                             lower_limit, test_data$log_preds))
+
+test_data$tax_preds[is.na(test_data$tax_preds)] <- lower_limit
+test_data$tax_preds <- ifelse(test_data$tax_preds >= upper_limit,
+                                         upper_limit, ifelse(test_data$tax_preds <= lower_limit,
+                                                             lower_limit, test_data$tax_preds))
+
+mae_current_model <- MAE(pred = test_data$log_preds, obs = test_data$view_time_perc)
+mae_new_tax_model <- MAE(pred = test_data$tax_preds, obs = test_data$view_time_perc)
+
+test_data <- test_data %>%
+  mutate(mtm_error = abs(log_preds - view_time_perc),
+         old_mtm_error = abs(tax_preds - view_time_perc))
+  
+
+course_aggregate <- test_data %>%
+  dplyr::group_by(course_name, published_date) %>%
+  dplyr::summarise(duration_in_hours = unique(ceiling(duration_in_hours * 4) / 4),
+                   total = sum(view_time_perc), 
+                   current_pred_total = sum(log_preds), 
+                   new_tax_total = sum(tax_preds),
+            sum_mtm_error = sum(mtm_error),
+            raw_error = total-current_pred_total) %>%
+  dplyr::mutate(APE = abs((total - current_pred_total)/total)
+         , perc_error = (current_pred_total - total)/total
+         , new_tax_perc_error = (new_tax_total - total)/total)
+
+source('~/SageMaker/efs/author_compensation/utils/utilities.R')
+revenue_data <- snowflake_query("SELECT 
+                                     date_month as usage_year_month,
+                                     seconds AS royalty_revenue
+                                     FROM UNCERTIFIED.ABCD")
+
+revenue_forecast <- revenue_data %>%
+  dplyr::mutate(month = usage_year_month) %>%
+  dplyr::select(-usage_year_month)
+
+comp_targets <- snowflake_query('select * from analytics.uncertified.vw_compensation_targets')
+
+test_data <- test_data %>%
+  mutate(duration_in_hours = ceiling(duration_in_hours * 4) / 4)
+
+revenue_forecast <- revenue_forecast %>%
+  select(royalty_revenue) %>%
+  na.omit() %>%
+  mutate(course_age =1:n())
+
+royalty_rates <- test_data %>%
+  left_join(revenue_forecast, by = 'course_age') %>%
+  mutate(current_attributable_revenue = (log_preds * royalty_revenue),
+         new_tax_attributable = (tax_preds * royalty_revenue),
+         actual_attributable_revenue = (view_time_perc * royalty_revenue))
+
+rr_plotting <- royalty_rates
+
+royalty_rates <- royalty_rates %>%
+  group_by(course_name, published_date) %>%
+  summarise(total_pred_rev = sum(current_attributable_revenue),
+            total_new_tax_pred_rev = sum(new_tax_attributable),
+            total_actual_rev = sum(actual_attributable_revenue)) %>%
+  select(course_name, published_date, total_pred_rev,total_new_tax_pred_rev, total_actual_rev)
+
+
+new_rr <- course_aggregate %>%
+  left_join(comp_targets, by = 'duration_in_hours') %>%
+  left_join(royalty_rates, by = c('course_name', 'published_date')) %>%
+  mutate(recommended_royalty_rate_raw = (compensation_target/total_pred_rev),
+         recommended_royalty_rate = ifelse(recommended_royalty_rate_raw > .15, 
+                                           .15, recommended_royalty_rate_raw),
+         recommended_royalty_rate = ifelse(recommended_royalty_rate_raw < 0.06,
+                                           0.06, round(recommended_royalty_rate, 3)),
+         new_tax_recommended_raw = (compensation_target/total_new_tax_pred_rev),
+         new_tax_recommended = ifelse(new_tax_recommended_raw > .15, 
+                                           .15, new_tax_recommended_raw),
+         new_tax_recommended = ifelse(new_tax_recommended < 0.06, 
+                                           0.06, round(new_tax_recommended, 3)),
+         desired_compensation = compensation_target/36)
+
+
+unconstrained_rr <- course_aggregate %>%
+  left_join(comp_targets, by = 'duration_in_hours') %>%
+  left_join(royalty_rates, by = c('course_name', 'published_date')) %>%
+  mutate(recommended_royalty_rate_raw = (compensation_target/total_pred_rev),
+         recommended_royalty_rate = ifelse(recommended_royalty_rate_raw > .20,
+                                           .20, recommended_royalty_rate_raw),
+         recommended_royalty_rate = ifelse(recommended_royalty_rate_raw < 0.05,
+                                           0.05, round(recommended_royalty_rate, 3)),
+         new_tax_recommended_raw = (compensation_target/total_new_tax_pred_rev),
+         new_tax_recommended = ifelse(new_tax_recommended_raw > .20,
+                                           .20, new_tax_recommended_raw),
+         new_tax_recommended = ifelse(new_tax_recommended_raw < 0.04,
+                                           0.04, round(new_tax_recommended, 3)),
+         new_old_constrained = ifelse(new_tax_recommended_raw > .15,
+                                           .15, new_tax_recommended_raw),
+         new_old_constrained = ifelse(new_old_constrained < 0.08,
+                                            0.08, round(new_old_constrained, 3)),
+         desired_compensation = compensation_target/36)
+
+
+dist_unconstrained <- unconstrained_rr
+
+unconstrained_rr <- rr_plotting %>%
+  left_join(unconstrained_rr[,c(1:2, 15:21)], by = c('course_name','published_date')) %>%
+  mutate(pred_author_pmt = current_attributable_revenue * recommended_royalty_rate,
+         new_tax_auth_pmt_cons = new_tax_attributable * new_old_constrained,
+         new_tax_auth_pmt = new_tax_attributable * new_tax_recommended,
+         desired_author_pmt = desired_compensation)
+
+rr_plotting <- rr_plotting %>%
+  left_join(new_rr[,c(1:2, 15:20)], by = c('course_name','published_date')) %>%
+  mutate(pred_author_pmt = current_attributable_revenue * recommended_royalty_rate,
+         new_tax_auth_pmt = new_tax_attributable * new_tax_recommended,
+         desired_author_pmt = desired_compensation)
+
+hist_data <- rr_plotting %>%
+  group_by(course_name, published_date) %>%
+  summarise(total_new_diff = sum(pred_author_pmt - desired_author_pmt),
+            total_tax_diff = sum(new_tax_auth_pmt - desired_author_pmt),
+            new_over_under = as.factor(ifelse(total_new_diff < 0, 'Underpaid', 'Overpaid')),
+            new_tax_over_under = as.factor(ifelse(total_tax_diff < 0, 'Underpaid', 'Overpaid')))
+
+high_performers <- unconstrained_rr %>%
+  filter(recommended_royalty_rate < .10) %>%
+  group_by(course_name) %>%
+  summarise(current_pmts = sum(pred_author_pmt),
+            new_tax_pmts = sum(new_tax_auth_pmt),
+            total_desired = sum(desired_author_pmt))
+
+high_performers <- high_performers %>%
+  mutate(new_tax_pmt_diff = round(new_tax_pmts - total_desired, 2),
+         new_pmt_diff = round(current_pmts - total_desired, 2),
+         underpaid_current = ifelse(new_pmt_diff > 0, 'Overpaid', 'Underpaid'),
+         underpaid_new_tax = ifelse(new_tax_pmt_diff > 0, 'Overpaid', 'Underpaid'))
+
+high_plotting <- high_performers
+
+rr_plotting <- rr_plotting %>%
+  mutate(current_savings = pred_author_pmt - desired_author_pmt,
+         new_tax_savings = new_tax_auth_pmt - desired_author_pmt,
+         new_model_savings = current_savings - new_tax_savings,
+         rr_group = as.factor(ifelse(recommended_royalty_rate >= 0.13, '13-15% RR', ifelse(recommended_royalty_rate < 0.13 & recommended_royalty_rate >= 0.11, '11-13% RR', '8-11% RR'))))
+
+high_performers <- unconstrained_rr %>%
+  filter(recommended_royalty_rate < .10)
+
+high_performers <- high_performers %>%
+  mutate(rr_group = as.factor(ifelse(recommended_royalty_rate >= 0.08, '8-10% RR', ifelse(recommended_royalty_rate < 0.08 & recommended_royalty_rate >= 0.06, '6-8% RR','5-6% RR'))))
+
+
+low_performers <- unconstrained_rr %>%
+  filter(recommended_royalty_rate > .14) %>%
+  group_by(course_name) %>%
+  summarise(current_pmts = sum(pred_author_pmt),
+            new_tax_pmts = sum(new_tax_auth_pmt),
+            total_desired = sum(desired_author_pmt))
+
+low_performers <- low_performers %>%
+  mutate(new_tax_pmt_diff = round(new_tax_pmts - total_desired, 2),
+         new_pmt_diff = round(current_pmts - total_desired, 2),
+         underpaid_current = ifelse(new_pmt_diff > 0, 'Overpaid', 'Underpaid'),
+         underpaid_new_tax = ifelse(new_tax_pmt_diff > 0, 'Overpaid', 'Underpaid'))
+
+low_plotting <- low_performers
+
+low_performers <- unconstrained_rr %>%
+  filter(recommended_royalty_rate > .14)
+
+
+low_performers <- low_performers %>%
+  mutate(rr_group = as.factor(ifelse(recommended_royalty_rate >= 0.18, '18-20% RR', ifelse(recommended_royalty_rate < 0.18 & recommended_royalty_rate >= 0.16, '16-18% RR', '14-16% RR'))))
+
+unconstrained_rr <- unconstrained_rr %>%
+  mutate(current_savings = pred_author_pmt - desired_author_pmt,
+         new_tax_savings = new_tax_auth_pmt - desired_author_pmt,
+         new_model_savings = new_tax_savings - current_savings)
+
+mae_constrained <- MAE(pred = rr_plotting$new_tax_auth_pmt, obs = rr_plotting$desired_author_pmt)
+mae_new_tax_pmt <- MAE(pred = unconstrained_rr$new_tax_auth_pmt, obs = unconstrained_rr$desired_author_pmt)
+
+underpaid_unconstrained <- unconstrained_rr %>%
+  group_by(course_name) %>%
+ summarise(total_current_savings = round(sum(current_savings),2),
+           total_new_tax_savings = round(sum(new_tax_savings), 2),
+           margin_diff = total_new_tax_savings - total_current_savings) %>%
+  filter(total_new_tax_savings < 0 | total_current_savings < 0)
+
+underpaid <- rr_plotting %>%
+  group_by(course_name) %>%
+ summarise(total_current_savings = round(sum(current_savings),2),
+           total_new_tax_savings = round(sum(new_tax_savings), 2),
+           margin_diff = total_current_savings - total_new_tax_savings) %>%
+  filter(total_current_savings < 0 | total_new_tax_savings < 0)
+  
+underpaid_current <- rr_plotting %>%
+  filter(course_name %in% underpaid[underpaid$total_current_savings < 0,]$course_name) %>%
+  group_by(course_name, recommended_royalty_rate) %>%
+  summarise(avg_underpay = mean(current_savings),
+            total_underpay = sum(current_savings))
+
+underpaid_new_tax <- rr_plotting %>%
+  filter(course_name %in% underpaid[underpaid$total_new_tax_savings < 0,]$course_name) %>%
+  group_by(course_name, new_tax_recommended) %>%
+  summarise(avg_underpay = mean(new_tax_savings),
+            total_underpay = sum(new_tax_savings))
+
+unc_under_current <- unconstrained_rr %>%
+  filter(course_name %in% underpaid_unconstrained[underpaid_unconstrained$total_current_savings < 0,]$course_name) %>%
+  group_by(course_name, recommended_royalty_rate) %>%
+  summarise(avg_underpay = mean(current_savings),
+            total_underpay = sum(current_savings))
+
+unc_under_new_tax <- unconstrained_rr %>%
+  filter(course_name %in% underpaid_unconstrained[underpaid_unconstrained$total_new_tax_savings < 0,]$course_name) %>%
+  group_by(course_name, new_tax_recommended) %>%
+  summarise(avg_underpay = mean(new_tax_savings),
+            total_underpay = sum(new_tax_savings))
+
+
+overpaid_unconstrained <- unconstrained_rr %>%
+  group_by(course_name) %>%
+ summarise(total_current_savings = round(sum(current_savings),2),
+           total_new_tax_savings = round(sum(new_tax_savings), 2),
+           margin_diff = total_new_tax_savings - total_current_savings) %>%
+  filter(total_current_savings > 0 | margin_diff > 0)
+
+overpaid <- rr_plotting %>%
+  group_by(course_name) %>%
+ summarise(total_current_savings = round(sum(current_savings),2),
+           total_new_tax_savings = round(sum(new_tax_savings), 2),
+           margin_diff = total_new_tax_savings - total_current_savings) %>%
+  filter(total_current_savings > 0 | total_new_tax_savings > 0)
+  
+overpaid_current <- rr_plotting %>%
+  filter(course_name %in% overpaid[overpaid$total_current_savings > 0,]$course_name) %>%
+  group_by(course_name, recommended_royalty_rate) %>%
+  summarise(avg_underpay = mean(current_savings),
+            total_underpay = sum(current_savings))
+
+overpaid_new_tax <- rr_plotting %>%
+  filter(course_name %in% overpaid[overpaid$total_new_tax_savings > 0,]$course_name) %>%
+  group_by(course_name, new_tax_recommended) %>%
+  summarise(avg_underpay = mean(new_tax_savings),
+            total_underpay = sum(new_tax_savings))
+
+unc_over_current <- unconstrained_rr %>%
+  filter(course_name %in% overpaid_unconstrained[overpaid_unconstrained$total_current_savings > 0,]$course_name) %>%
+  group_by(course_name, recommended_royalty_rate) %>%
+  summarise(avg_underpay = mean(current_savings),
+            total_underpay = sum(current_savings))
+
+unc_over_new_tax <- unconstrained_rr %>%
+  filter(course_name %in% overpaid_unconstrained[overpaid_unconstrained$total_new_tax_savings > 0,]$course_name) %>%
+  group_by(course_name, new_tax_recommended) %>%
+  summarise(avg_underpay = mean(new_tax_savings),
+            total_underpay = sum(new_tax_savings))
+
+```
+
+# Overall Summary
+
+## Dollar Savings in New vs. Current Model
+
+* New Taxonomy Model Model
+  + Savings (Desired Payment - New Projected Payment): `r round(sum(rr_plotting$new_tax_savings),2)`
+* Current Model
+  + Savings (Desired Payment - Current Projected Payment) `r round(sum(rr_plotting$current_savings), 2)`
+
+## Underpayment Metrics
+
+* New Taxonomy Model
+  + Total Amount of Underpayment for Test courses: `r sum(underpaid_new_tax$total_underpay)`
+  + Average Month-to-Month Underpayment: `r mean(underpaid_new_tax$total_underpay)`
+* Current Model
+  + Total Amount of Underpayment for Test courses: `r sum(underpaid_current$total_underpay)`
+  + Average Month-to-Month Underpayment: `r mean(underpaid_current$total_underpay)`
+
+## Overpayment Metrics
+
+* New Taxonomy Model
+  + Total Amount of Overpayment for Test courses: `r sum(overpaid_new_tax$total_underpay)`
+  + Average Month-to-Month Overpayment: `r mean(overpaid_new_tax$total_underpay)`
+* Current Model
+  + Total Amount of Overpayment for Test courses: `r sum(overpaid_current$total_underpay)`
+  + Average Month-to-Month Overpayment: `r mean(overpaid_current$total_underpay)`
+
+# Appendix (In-Depth Exploration)
+
+## R-Squared and Important Variables
+
+The new taxonomy model model explains ~`r paste0(round(summary(new_tax_model)$r.squared, 4) * 100)`% of the variability in the data, using the R-Squared metric. The current model explains `r paste0(round(summary(current_model)$r.squared * 100, 2), '%')`. A difference of `r paste0(round(summary(new_tax_model)$r.squared * 100, 2) - round(summary(current_model)$r.squared * 100, 2), '%')` variability explained is incredibly informative and produces a lucrative and increasingly accurate model over the projected lifetime of a course (in this case the available months for which the course has been available). 
+
+## Variable Importance
+
+```{r}
+plot(caret::varImp(current_model), top = 15)
+
+plot(caret::varImp(new_tax_model), top = 15)
+```
+
+## Coefficients
+
+
+```{r}
+coefs <- data.frame(coef(current_model$finalModel,unlist(current_model$bestTune)))
+coefs <- tibble::rownames_to_column(coefs, "coefficients")
+names(coefs) <- c('Coefficients', 'Values')
+coefs$Coefficients <- gsub('`', '', coefs$Coefficients)
+coefs$Coefficients <- gsub('primary_domain_tag', 'Domain Tag: ',coefs$Coefficients)
+coefs$Coefficients <- gsub('primary_super_domain', 'Super Domain: ',coefs$Coefficients)
+coefs$Coefficients <- gsub('primary_sub_domain', 'Sub Domain: ',coefs$Coefficients)
+coefs$Coefficients <- gsub('course_style_tag', 'Style Tag: ',coefs$Coefficients)
+coefs$Coefficients <- gsub('primary_atomic_tag', 'Atomic Tag: ',coefs$Coefficients)
+coefs <- coefs %>%
+  arrange(desc(Values)) %>%
+  na.omit()
+tbl_1 <- coefs %>%
+  filter(Values >= 0) %>%
+  head(10)
+tbl_2 <- coefs %>%
+  filter(Values < 0) %>%
+  arrange(Values) %>%
+  head(10)
+knitr::kables(list(
+  kbl(tbl_1,caption = '<center><strong>Positive Impactors</strong></center>') %>%
+  kable_styling(bootstrap_options = 'striped'),
+  kbl(tbl_2, caption = '<center><strong>Negative Impactors</strong></center>') %>%
+     kable_styling(bootstrap_options = 'striped'))) %>% kable_styling(full_width = FALSE)
+```
+
+
+
+## Predictive Performance
+
+Beginning our evaluation, we can take a look at the Mean Absolute Error (MAE) of the predictions vs. the actual view time percentage, of which the new taxonomy model was approximately **`r mae_new_tax_model`**. The current model's MAE is **`r mae_current_model`**. An increase in accuracy of this magnitude is staggering to say the least, with the model outperforming the previous iteration greatly **(New Taxonomy Model MAE - Current Model MAE = `r mae_new_tax_model - mae_current_model`)**. 
+
+
+```{r fig.asp = 0.8, fig.width = 10, fig.align = 'center'}
+filtered_course_list <- test_data %>%
+  group_by(course_name) %>%
+  summarise(count_vt = n()) %>%
+  filter(count_vt >= 18) %>%
+  select(course_name) %>%
+  mutate(course_name = as.character(course_name)) %>%
+  distinct()
+course_list <- filtered_course_list[sample(1:nrow(filtered_course_list), size = 10),]
+plot_list <- list()
+for(i in 1:nrow(course_list)) {
+  course_num <- as.character(course_list[i,])
+  plot_list[[i]] <- test_data %>% 
+  dplyr::filter(course_num == as.character(course_name)) %>%
+  ggplot() +
+  geom_point(aes(x = course_age, y = view_time_perc, color = 'Actual')) +
+  geom_point(aes(x = course_age, y = tax_preds, color = 'New Tax Model')) +
+  geom_point(aes(x = course_age, y = log_preds, color = 'Current Model')) +
+  geom_line(aes(x = course_age, y = view_time_perc, color = 'Actual')) +
+  geom_line(aes(x = course_age, y = log_preds, color = 'Current Model')) +
+  geom_line(aes(x = course_age, y = tax_preds, color = 'New Tax Model')) + 
+  geom_hline(yintercept = lower_limit, linetype = 'dashed', alpha = 5/10) +
+  theme_bw() +
+  ylab(NULL) + labs(title = NULL, subtitle = paste0('New Tax Acc. = ', round(round(sum(test_data[test_data$course_name == course_num,]$tax_preds), 5) - round(sum(test_data[test_data$course_name == course_num,]$view_time_perc), 5),5), ', ', 'Current Acc. =  ', round(round(sum(test_data[test_data$course_name == course_num,]$log_preds), 5) - round(sum(test_data[test_data$course_name == course_num,]$view_time_perc), 5),5))) + 
+  xlab(NULL) + scale_color_manual(name = 'VT Predictions', values = c('New Tax Model' = old_pred_color, 'Current Model' = new_pred_color, 'Actual' = 'black'))
+}
+gt <- patchwork::patchworkGrob(wrap_plots(plot_list, ncol = 2) + plot_layout(guides = 'collect'))
+gridExtra::grid.arrange(gt, left = "VT %", bottom = "Course Age", top = 'Model Performance on Sample Courses\nAccuracy: (+ = Overpredicted, - = Underpredicted)')
+```
+
+
+
+```{r fig.align='center'}
+course_aggregate %>%
+  ggplot() +
+  geom_density(aes(x = perc_error,colour = 'Current Model')) +
+  geom_density(aes(x = new_tax_perc_error, colour = 'New Tax Model')) +
+  theme_bw() + xlim(-10, 10) + scale_color_manual(name = "Dist. of % Error \nFor Predictions", values = c('Current Model' = new_pred_color, 'New Tax Model' = old_pred_color)) + 
+  ylab('Density') + xlab('Percent Error from Predicted to Actual') + labs(title = 'Density of View Time Percent Error', subtitle = '% Accuracy: (+ = Overpredicted, - = Underpredicted)') + geom_vline(xintercept = 0, alpha = 0.4)
+```
+
+
+
+```{r fig.align = 'center'}
+course_aggregate %>%
+  ggplot() +
+  geom_density(aes(x = total, color = 'Actual VT'), linetype = 'dashed') + 
+  geom_density(aes(x = current_pred_total, color = 'Current VT')) + 
+  geom_density(aes(x = new_tax_total, color = 'New Tax VT')) + 
+  theme_bw() + xlim(-0.005, 0.02) + scale_color_manual(name = "Dist. of VT % \nFor Predictions", values = c('Actual VT' = 'black',
+                                                                                                              'Current VT' = new_pred_color,
+                                                                                                              'New Tax VT' = old_pred_color)) + 
+  ylab('Density') + xlab('View Time %') + labs(title = 'VT Prediction Distribution')
+```
+
+
+
+## Royalty Predictions
+
+It should be noted that less than `r paste0(round(nrow(new_rr[new_rr$recommended_royalty_rate_raw >= 0.08 & new_rr$recommended_royalty_rate_raw <= 0.15,])/nrow(new_rr) * 100, 2), '%')` of the previous model's raw predictions fell between the bounds of 8-15%, meaning ~`r paste0(100 - round(nrow(new_rr[new_rr$recommended_royalty_rate_raw >= 0.08 & new_rr$recommended_royalty_rate_raw <= 0.15,])/nrow(new_rr) * 100, 2))`% of predicted values were re-centered to within this region.
+
+```{r fig.align = 'center'}
+new_rr %>%
+  ggplot() +
+  geom_density(aes(x = recommended_royalty_rate_raw, color = 'Current Recommended')) + geom_density(aes(x = new_tax_recommended_raw, color = 'New Tax Recommended')) + geom_vline(xintercept = 0.15, color = 'darkgreen', alpha = 0.5) + geom_vline(xintercept = 0.08, color = 'darkgreen', alpha = 0.5) + labs(title = 'Recommended Royalty Rate Distribution', subtitle = paste0(round(nrow(new_rr[new_rr$new_tax_recommended_raw >= 0.08 & new_rr$new_tax_recommended_raw <= 0.15,])/nrow(new_rr) * 100, 2), '% of old raw rates in bounded region (8-15%).', '\n', round(nrow(new_rr[new_rr$recommended_royalty_rate_raw >= 0.08 & new_rr$recommended_royalty_rate_raw <= 0.15,])/nrow(new_rr) * 100, 2), '% of new raw rates in bounded region (8-15%).')) + xlim(-0.05, 0.20) + scale_color_manual(name = "Dist. of Royalty\nRate Predictions", values = c('Current Recommended' = new_pred_color, 'New Tax Recommended' = old_pred_color)) + theme_bw()
+```
+
+
+## Bottom-Line Performance on Test Data
+
+```{r fig.asp = 0.8, fig.width = 10, fig.align = 'center'}
+filtered_course_list <- rr_plotting %>%
+  group_by(course_name) %>%
+  summarise(count_vt = n()) %>%
+  filter(count_vt >= 18) %>%
+  select(course_name) %>%
+  mutate(course_name = as.character(course_name)) %>%
+  distinct()
+course_list <- filtered_course_list[sample(1:nrow(filtered_course_list), size = 10),]
+plot_list <- list()
+for(i in 1:nrow(course_list)) {
+  course_num <- as.character(course_list[i,])
+  plot_list[[i]] <- rr_plotting %>% 
+  dplyr::filter(course_num == as.character(course_name)) %>%
+  ggplot() +
+  geom_point(aes(x = course_age, y = pred_author_pmt, color = 'Current MtM\nPayments')) +
+  geom_point(aes(x = course_age, y = new_tax_auth_pmt, color = 'New Tax\nMtM Payments')) +
+  geom_point(aes(x = course_age, y = desired_author_pmt, color = 'Desired MtM\nPayments')) +
+  geom_line(aes(x = course_age, y = pred_author_pmt, color = 'Current MtM\nPayments')) +
+  geom_line(aes(x = course_age, y = new_tax_auth_pmt, color = 'New Tax\nMtM Payments')) +
+  geom_line(aes(x = course_age, y = desired_author_pmt, color = 'Desired MtM\nPayments')) +
+  theme_bw() +
+  ylab(NULL) +
+  xlab(NULL) + labs(title = NULL, subtitle = paste0('New (',round(unique(rr_plotting[rr_plotting$course_name == course_num,]$new_tax_recommended) * 100, 2), '% RR): $', round(round(sum(rr_plotting[rr_plotting$course_name == course_num,]$new_tax_auth_pmt), 2) - round(sum(rr_plotting[rr_plotting$course_name == course_num,]$desired_author_pmt), 2),2), ', ', 'Cur. (',round(unique(rr_plotting[rr_plotting$course_name == course_num,]$recommended_royalty_rate) * 100, 2), '% RR): $', round(round(sum(rr_plotting[rr_plotting$course_name == course_num,]$pred_author_pmt), 2) - round(sum(rr_plotting[rr_plotting$course_name == course_num,]$desired_author_pmt), 2),2))) + scale_color_manual(name = "Royalty\nPayments", values = c('Current MtM\nPayments' = new_pred_color, 'Desired MtM\nPayments' = 'black', 'New Tax\nMtM Payments' = old_pred_color))
+}
+gt <- patchwork::patchworkGrob(wrap_plots(plot_list, ncol = 2) + plot_layout(guides = 'collect'))
+gridExtra::grid.arrange(gt, left = "Payment Made ($)", bottom = "Course Age", top = 'Total Individual Course Payments\n(+ = Overpaid, - = Underpaid)')
+```
+
+
+
+```{r, fig.align = 'center'}
+knitr::kables(list(
+  kbl(table(hist_data$new_tax_over_under),col.names = NULL, caption = '<center><strong>Old Model</strong></center>') %>%
+  kable_styling(bootstrap_options = 'striped'),
+  
+  kbl(table(hist_data$new_over_under),col.names = NULL, caption = '<center><strong>New Model</strong></center>') %>%
+     kable_styling(bootstrap_options = 'striped'))) %>% kable_styling()
+```
+
+```{r, fig.align= 'center'}
+rr_plotting %>%
+  group_by(course_name, published_date) %>%
+  summarise(total_new_diff = sum(pred_author_pmt - desired_author_pmt),
+            total_tax_diff = sum(new_tax_auth_pmt - desired_author_pmt)) %>%
+  ggplot() + geom_density(aes(x = total_new_diff, colour = 'New - Desired')) + geom_density(aes(x = total_tax_diff, colour = 'Old - Desired')) + scale_x_continuous(breaks = scales::pretty_breaks(n = 10)) + theme_bw() + theme(axis.text.x = element_text(angle = 45, hjust=1)) + labs(title = 'Payment Difference Distribution\nfrom Desired Payments', subtitle = '+ = Overpaid, - = Underpaid') + xlab('Payment Difference Amount') + ylab('Density') + 
+  geom_vline(xintercept = 0, alpha = 0.3) + scale_color_manual(name = "Model Payments", values =  c('New - Desired' = new_pred_color, 'Old - Desired' = old_pred_color))
+```
+
+```{r, fig.align= 'center', fig.width = 10, fig.asp = 0.8}
+rr_plotting %>%
+  group_by(course_name, published_date, rr_group) %>%
+  summarise(total_new_diff = sum(pred_author_pmt - desired_author_pmt),
+            total_tax_diff = sum(new_tax_auth_pmt - desired_author_pmt)) %>%
+  ggplot() + geom_density(aes(x = total_new_diff, colour = 'New - Desired')) + geom_density(aes(x = total_tax_diff, colour = 'Old - Desired')) + scale_x_continuous(breaks = scales::pretty_breaks(n = 10)) + theme_bw() + theme(axis.text.x = element_text(angle = 45, hjust=1)) + labs(title = 'Payment Difference Distribution from Desired Payments by Royalty Rate Group', subtitle = '+ = Overpaid, - = Underpaid') + xlab('Payment Difference Amount') + ylab('Density') + 
+  geom_vline(xintercept = 0, alpha = 0.3) + scale_color_manual(name = "Model Payments", values =  c('New - Desired' = new_pred_color, 'Old - Desired' = old_pred_color)) + facet_wrap(~rr_group, nrow = 2)
+```
+
+
+
+## Lower-Bound Unconstrained Performance
+
+Calling back to the [Royalty Predictions] section, the distribution of the predictions for the new model was relatively even over the region of approximately 2.5% and 20%. Given that the factors most important to the models predictive power are tag styles and course domains that historically are linked with high-performing courses, what would happen if the model rates given were left unconstrained in the lower region? Would this greatly penalize certain authors with gross underpayments and losses in revenue that would otherwise be typical for courses projected to be "high-performers"? To test this we'll use the same visualization method shown previously in [Bottom-Line Performance on Test Data] only constraining values below the upper bound of 15%. The courses shown are subset to only include courses that are likely to be high performers (~10% or lower royalty rate).
+
+It should also be noted that to track the error of these new constraints, the old model will be tested against the previously used desired royalty rate/payment (8-15% constraints), while the *new* desired author royalty rate/payment will be under the same conditions as the newly proposed model constraints.
+
+Again, the key finding in the new model's exploration and comparison to the previous iteration is that **the model performs best when using the unconstrained predictions given by the model output in calculation of the royalty rate.** Previous bounds set constricted the performance of the model by ensuring there were only royalty rates given between 8-15%, but when examining the performance with a new lower-bound constraint (i.e. royalty rates can fall anywhere between 3-15%), we see a large increase in predictive performance and proximity to target compensation for individual "high-performer" courses. Below we examine just how many more of the raw predictions we capture by not constraining the bounds for predicted rates:
+
+```{r, fig.align='center'}
+dist_unconstrained %>%
+  ggplot() +
+  geom_density(aes(x = recommended_royalty_rate_raw, color = 'Current Recommended')) +
+ geom_vline(xintercept = 0.15, color = 'darkgreen', alpha = 0.5) + geom_vline(xintercept = 0.05, color = 'darkgreen', alpha = 0.5) + labs(title = 'New Model Recommended Royalty Rate Distribution', subtitle = paste0(round(nrow(new_rr[new_rr$recommended_royalty_rate_raw >= 0.08 & new_rr$recommended_royalty_rate_raw <= 0.15,])/nrow(new_rr) * 100, 2), '% of raw rates in old bounded region (8-15%).', '\n', round(nrow(dist_unconstrained[dist_unconstrained$recommended_royalty_rate_raw >= 0.05 & dist_unconstrained$recommended_royalty_rate_raw <= 0.15,])/nrow(dist_unconstrained) * 100, 2), '% of raw rates in proposed bounded region (5-15%).')) + xlim(-0.05, 0.20) + scale_color_manual(name = "Dist. of Royalty\nRate Predictions", values = c('Current Recommended' = new_pred_color)) + theme_bw()
+```
+
+By setting the lower bound constraint to 3% and allowing the model predictions to be used for high performing courses, we nearly **double** the amount of raw predictions used for compensation offers.
+
+Now examining the lower-bound unconstrained performance on a course by course basis over sample courses, we can determine the model's performance at a glace. The grey line indicates the previous bounded desired payment, and is used to calculate the previous model's proximity in payment amount.
+
+```{r fig.asp = 0.8, fig.width = 10, fig.align = 'center'}
+
+filtered_course_list <- high_performers %>%
+  group_by(course_name) %>%
+  summarise(count_vt = n()) %>%
+  filter(count_vt >= 18) %>%
+  select(course_name) %>%
+  mutate(course_name = as.character(course_name)) %>%
+  distinct()
+course_list <- filtered_course_list[sample(1:nrow(filtered_course_list), size = 10),]
+plot_list <- list()
+for(i in 1:nrow(course_list)) {
+  course_num <- as.character(course_list[i,])
+  plot_list[[i]] <- high_performers %>%
+  dplyr::filter(course_name == course_num) %>%
+  ggplot() +
+  geom_point(aes(x = course_age, y = pred_author_pmt, color = 'Current Constraint MtM\nPayments')) +
+  geom_point(aes(x = course_age, y = new_tax_auth_pmt, color = 'New Tax New Constraint\nMtM Payments')) +
+  geom_point(aes(x = course_age, y = desired_author_pmt, color = 'Desired MtM\nPayments')) +
+  geom_line(aes(x = course_age, y = pred_author_pmt, color = 'Current Constraint MtM\nPayments')) +
+  geom_line(aes(x = course_age, y = new_tax_auth_pmt, color = 'New Tax New Constraint\nMtM Payments')) +
+  geom_line(aes(x = course_age, y = desired_author_pmt, color = 'Desired MtM\nPayments')) +
+  theme_bw() +
+  ylab(NULL) +
+  xlab(NULL) + labs(title = NULL, subtitle = paste0('New (',round(unique(high_performers[high_performers$course_name == course_num,]$new_old_constrained) * 100), '% RR): $', round(round(sum(high_performers[high_performers$course_name == course_num,]$new_tax_auth_pmt)) - round(sum(high_performers[high_performers$course_name == course_num,]$desired_author_pmt), 2)), ', ', 'Current (',round(unique(high_performers[high_performers$course_name == course_num,]$recommended_royalty_rate) * 100, 2), '% RR): $', round(round(sum(high_performers[high_performers$course_name == course_num,]$pred_author_pmt)) - round(sum(high_performers[high_performers$course_name == course_num,]$desired_author_pmt))))) + scale_color_manual(name = "Royalty\nPayments", values = c('Current Constraint MtM\nPayments' = new_pred_color,'Desired MtM\nPayments' = 'black', 'New Tax New Constraint\nMtM Payments' = old_pred_color))
+}
+gt <- patchwork::patchworkGrob(wrap_plots(plot_list, ncol = 2) + plot_layout(guides = 'collect'))
+gridExtra::grid.arrange(gt, left = "Payment Made ($)", bottom = "Course Age", top = 'Lower-Bound Unconstrained vs. Constrained Payments\n(+ = Overpaid, - = Underpaid)')
+```
+
+With the newly unconstrained lower-bound prediction logic in place, the new model has great success in predicting a closer target royalty rate to the desired one set by PS. Again, erring more towards overcompensation is the goal, and with the new royalty rates this is still fulfilled in most instances. The margin however with which the author is overpaid is significantly lower, meaning there are significantly more savings available to Pluralsight in the long run for high performing courses. Examining the previous model's number of over-paid vs. under-paid courses compared to the new model we can see that among high performers, the new model greatly decreases the number of overpaid courses, and for these circumstances that behavior is acceptable, as long as the margin of underpayment remains low.
+
+
+```{r, fig.align='center'}
+knitr::kables(list(
+  kbl(table(high_plotting$underpaid_new_tax),col.names = NULL, caption = '<center><strong>New Model (Old Constraints)</strong></center>') %>%
+  kable_styling(bootstrap_options = 'striped'),
+
+  kbl(table(high_plotting$underpaid_current),col.names = NULL, caption = '<center><strong>New Model (New Constraints)</strong></center>') %>%
+     kable_styling(bootstrap_options = 'striped'))) %>% kable_styling()
+```
+
+The new model with updated constraints projects a total difference between desired and predicted payment for high performing courses of **`r round(sum(high_plotting$new_pmt_diff),2)`**, or an overall *under-paying* to authors for high performing courses of **`r paste0('$',abs(round(sum(high_plotting$new_pmt_diff),2)))`**. Under the old constraints the new model projected a difference of **`r paste0('$',round(sum(high_plotting$new_tax_pmt_diff),2))`**, or an *over-payment* to authors by **`r abs(round(sum(high_plotting$new_tax_pmt_diff),2))`**. The *overall savings* for high performing courses in the new model vs. the old total **`r paste0('$',round(abs(abs(sum(high_plotting$new_pmt_diff)) - sum(high_plotting$new_tax_pmt_diff)), 2))`**.
+
+The closeness of the new models projected payments to 0 indicate that overall, there would likely be a greater accuracy provided by allowing the model to give unconstrained royalty rates in the lower bound. However, as mentioned previous, we must check the distribution of the payment differences to ensure there isn't any indicator that most courses are being grossly over and underpaid, thus resulting in a deceptive "close to target" compensation total.
+
+```{r, fig.align = 'center'}
+high_plotting %>%
+  ggplot() + geom_density(aes(x = new_pmt_diff, colour = 'New - Desired')) + geom_density(aes(x = new_tax_pmt_diff, colour = 'Old - Desired')) + scale_x_continuous(breaks = scales::pretty_breaks(n = 10)) + theme_bw() + theme(axis.text.x = element_text(angle = 45, hjust=1)) + labs(title = 'Payment Difference Distribution\nfrom Desired Payments for High Performers', subtitle = '+ = Overpaid, - = Underpaid') + xlab('Payment Difference Amount') + ylab('Density') +
+  geom_vline(xintercept = 0, alpha = 0.3) + scale_color_manual(name = "Model Payments", values = c('New - Desired' = new_pred_color, 'Old - Desired' = old_pred_color))
+```
+
+Taking the same approach as before in [Bottom-Line Performance on Test Data], we can determine if the new lower-bound "high-performers" are penalized depending on the grouping of their royalty rate while others are over-compensated. Ensuring there is no one group that is over-penalized/under-paid is paramount for determining whether to implement the new model or not.
+
+```{r, fig.align= 'center', fig.width = 10, fig.asp = 0.8}
+high_performers %>%
+  group_by(course_name, published_date, rr_group) %>%
+  summarise(total_new_diff = sum(pred_author_pmt - desired_author_pmt),
+            total_tax_diff = sum(new_tax_auth_pmt - desired_author_pmt)) %>%
+  ggplot() + geom_density(aes(x = total_new_diff, colour = 'New - Desired')) + geom_density(aes(x = total_tax_diff, colour = 'Old - Desired')) + scale_x_continuous(breaks = scales::pretty_breaks(n = 8)) + theme_bw() + theme(axis.text.x = element_text(angle = 45, hjust=1)) + labs(title = 'Payment Difference Distribution from Desired Payments by Royalty Rate Group', subtitle = '+ = Overpaid, - = Underpaid') + xlab('Payment Difference Amount') + ylab('Density') +
+  geom_vline(xintercept = 0, alpha = 0.3) + scale_color_manual(name = "Model Payments", values =  c('New - Desired' = new_pred_color, 'Old - Desired' = old_pred_color)) + facet_wrap(~rr_group, nrow = 2, ncol = 2)
+```
+
+In line with the goals for the new algorithms performance, no one group is penalized over others for the lower-bound unconstrained royalty rates as it relates to payment differences. This shows that the model has great confidence and accuracy when using the raw predictions for royalty rates in high-performing courses. This is a promising sign that the new model may be accurate enough to deploy this new logic when creating offers for author opportunities, resulting in greater savings for PS.
+
+## Upper-Bound New Constraint Performance
+
+Now that the new lower-bound constraints have been explored and tested, what of the upper-bound constraints? When examining the coefficients of the model, the importance of tagging is extremely noticeable. This gives indication that the model utilizes the categories, subjects, and content of the courses to predict their performance at PS. When lowering the constraints, the model shows an increase in performance for courses it can identify as high-performers. It is likely then that the same behavior applies for courses that are not as popular, or "low-performers". Niche content is very important to users of PS as well as the authors who create it, and ensuring the new model maintains the same standard of over-payment to this group of content authors is extremely important. An additional facet of the exploration of this topic would be to determine if the model, given freedom to allow royalty rates as high as perhaps 20%, gains Pluralsight a significant increase in savings over the previous model. This would mean that courses are more closely compensated to the target amount, even when they are low-performers.
+
+Using the unbound lower region for predictions and the newly proposed 20% upper bound constraint, the figure below shows the number of raw predictions captured by the new logic:
+
+```{r}
+dist_unconstrained %>%
+  ggplot() +
+  geom_density(aes(x = new_tax_recommended_raw), color = new_pred_color) +
+ geom_vline(xintercept = 0.20, color = 'darkgreen', alpha = 0.5) + geom_vline(xintercept = 0.05, color = 'darkgreen', alpha = 0.5) + labs(title = 'New Model Recommended Royalty Rate Distribution', subtitle = paste0(round(nrow(dist_unconstrained[dist_unconstrained$recommended_royalty_rate_raw >= 0.05 & dist_unconstrained$recommended_royalty_rate_raw <= 0.20,])/nrow(dist_unconstrained) * 100, 2), '% of  new raw rates in proposed bounded region (5-20%).')) + xlim(-0.05, 0.25) + theme_bw()
+```
+
+**Over 40% of the raw predictions are captured in the new constraint bounds (5-20%)**
+
+Examining the new projected payments to authors using only courses with a predicted royalty rate of 14% or above, we can visualize the behavior of the model's predictive values in the new constraint region. Based on the new projected view times, the royalty rates in this region would hopefully give total payments much closer in proximity to the internal target value set at Pluralsight. The grey dashed line is for comparison of the old model's predicted payment proximity to the old desired payment amount.
+
+```{r fig.asp = 0.8, fig.width = 10, fig.align = 'center'}
+filtered_course_list <- low_performers %>%
+  group_by(course_name) %>%
+  summarise(count_vt = n()) %>%
+  filter(count_vt >= 18) %>%
+  select(course_name) %>%
+  mutate(course_name = as.character(course_name)) %>%
+  distinct()
+course_list <- filtered_course_list[sample(1:nrow(filtered_course_list), size = 10),]
+plot_list <- list()
+for(i in 1:nrow(course_list)) {
+  course_num <- as.character(course_list[i,])
+  plot_list[[i]] <- low_performers %>%
+  dplyr::filter(course_num == as.character(course_name)) %>%
+  ggplot() +
+  geom_point(aes(x = course_age, y = pred_author_pmt, color = 'Current Constraint MtM\nPayments')) +
+  geom_point(aes(x = course_age, y = new_tax_auth_pmt, color = 'New Tax New Constraint\nMtM Payments')) +
+  geom_point(aes(x = course_age, y = desired_author_pmt, color = 'Desired MtM\nPayments')) +
+  geom_line(aes(x = course_age, y = pred_author_pmt, color = 'Current Constraint MtM\nPayments')) +
+  geom_line(aes(x = course_age, y = new_tax_auth_pmt, color = 'New Tax New Constraint\nMtM Payments')) +
+  geom_line(aes(x = course_age, y = desired_author_pmt, color = 'Desired MtM\nPayments')) +
+  theme_bw() +
+  ylab(NULL) +
+  xlab(NULL) + labs(title = NULL, subtitle = paste0('New (',round(unique(low_performers[low_performers$course_name == course_num,]$new_tax_recommended) * 100), '% RR): $', round(round(sum(low_performers[low_performers$course_name == course_num,]$new_tax_auth_pmt)) - round(sum(low_performers[low_performers$course_name == course_num,]$desired_author_pmt), 2),2), ', ', 'Current (',round(unique(low_performers[low_performers$course_name == course_num,]$recommended_royalty_rate) * 100), '% RR): $', round(round(sum(low_performers[low_performers$course_name == course_num,]$pred_author_pmt)) - round(sum(low_performers[low_performers$course_name == course_num,]$desired_author_pmt))))) + scale_color_manual(name = "Royalty\nPayments", values = c('Current Constraint MtM\nPayments' = new_pred_color, 'Desired MtM\nPayments' = 'black', 'New Tax New Constraint\nMtM Payments' = old_pred_color))
+}
+gt <- patchwork::patchworkGrob(wrap_plots(plot_list, ncol = 2) + plot_layout(guides = 'collect'))
+gridExtra::grid.arrange(gt, left = "Payment Made ($)", bottom = "Course Age", top = 'Projected Course Payments with 20% Upper-Bound\nAccuracy: (+ = Overpaid, - = Underpaid)')
+```
+
+Much like the [Lower-Bound Unconstrained Performance], the new upper-bound constraint gives a much closer target compensation to low-performing courses. This means that the authors who commission content that is unlikely to be viewed frequently are still compensated accordingly, and in the case of the new model much more accurately.
+
+In line with pluralsight's objective to over-pay authors, we must ensure that the new constraint doesn't contrast this goal. Taking a look under the new model with the new constraints, we can determine the number of courses that were previously "overpaid" and "underpaid" respectively. The hope would be that the new model increases the number of overpaid courses, as low-performers are unlikely to receive much compensation from VT % and the majority from completion payments.
+
+```{r, fig.align = 'center'}
+knitr::kables(list(
+  kbl(table(low_plotting$underpaid_new_tax),col.names = NULL, caption = '<center><strong>New Tax Model</strong></center>') %>%
+  kable_styling(bootstrap_options = 'striped'),
+
+  kbl(table(low_plotting$underpaid_current),col.names = NULL, caption = '<center><strong>Current Model</strong></center>') %>%
+     kable_styling(bootstrap_options = 'striped'))) %>% kable_styling()
+```
+
+With an increase in overpaid courses with the new increased upper-bound, this reflects the type of model behavior we'd hope to see by changing the logic.
+
+The new model projects a total difference between desired and predicted payment for low performing courses of **`r round(sum(low_plotting$new_pmt_diff),2)`**, or an overall *over-payment* to authors for high performing courses of **`r paste0('$', abs(round(sum(low_plotting$new_pmt_diff),2)))`**. The old model projected a difference of **`r round(sum(low_plotting$new_tax_pmt_diff),2)`**, or an *over-payment* to authors by **`r paste0('$', abs(round(sum(low_plotting$new_tax_pmt_diff),2)))`**. The *overall savings* for low performing courses in the new model vs. the old total **`r paste0('$', round(abs(abs(sum(low_plotting$new_pmt_diff)) - sum(low_plotting$new_tax_pmt_diff)), 2))`**.
+
+The closeness of the new models projected payments to 0 indicate that overall, there would likely be a greater accuracy provided by allowing the model to give new constraints for royalty rates in the upper bound (20%). However, as mentioned previous, we must check the distribution of the payment differences to ensure there isn't any indicator that most courses are being grossly over and underpaid, thus resulting in a "close to target" compensation total.
+
+```{r, fig.align = 'center'}
+low_plotting %>%
+  ggplot() + geom_density(aes(x = new_pmt_diff, colour = 'New - Desired')) + geom_density(aes(x = new_tax_pmt_diff, colour = 'Old - Desired')) + scale_x_continuous(breaks = scales::pretty_breaks(n = 10)) + theme_bw() + theme(axis.text.x = element_text(angle = 45, hjust=1)) + labs(title = 'Payment Difference Distribution\nfrom Desired Payments for Low Performers', subtitle = '+ = Overpaid, - = Underpaid') + xlab('Payment Difference Amount') + ylab('Density') +
+  geom_vline(xintercept = 0, alpha = 0.3) + scale_color_manual(name = "Model Payments", values = c('New - Desired' = new_pred_color, 'Old - Desired' = old_pred_color))
+```
+
+The majority of payments are centered in the positive region, reflecting an overall over-payment to authors with lower-performing courses. However before we implement this change in production, we again must examine the individual groups to ensure we don't accept a "false accuracy", with one group being underpaid and another overpaid greatly.
+
+```{r, fig.align= 'center', fig.width = 10, fig.asp = 0.8}
+low_performers %>%
+  group_by(course_name, published_date, rr_group) %>%
+  summarise(total_new_diff = sum(pred_author_pmt - desired_author_pmt),
+            total_tax_diff = sum(new_tax_auth_pmt - desired_author_pmt)) %>%
+  ggplot() + geom_density(aes(x = total_new_diff, colour = 'New - Desired')) + geom_density(aes(x = total_tax_diff, colour = 'Old - Desired')) + scale_x_continuous(breaks = scales::pretty_breaks(n = 8)) + theme_bw() + theme(axis.text.x = element_text(angle = 45, hjust=1)) + labs(title = 'Payment Difference Distribution from Desired Payments by Royalty Rate Group', subtitle = '+ = Overpaid, - = Underpaid') + xlab('Payment Difference Amount') + ylab('Density') +
+  geom_vline(xintercept = 0, alpha = 0.3) + scale_color_manual(name = "Model Payments", values =  c('New - Desired' = new_pred_color, 'Old - Desired' = old_pred_color)) + facet_wrap(~rr_group, nrow = 2)
+```
+
+For the groups included, the overall trend is towards over-payment to authors, reflecting the mission of the Author Compensation strategy at PS.
