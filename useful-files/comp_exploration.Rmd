@@ -1,0 +1,861 @@
+---
+title: "Algorithmic Framework for Author Compensation at Pluralsight"
+author: "Brayden Ross, Senior Data Analyst"
+date: "`r format(Sys.Date(), '%B %d, %Y')`"
+output:
+  html_document:
+    pdf_document: null
+    theme: lumen
+    toc: yes
+    toc_float: yes
+    code_folding: hide
+  pdf_document:
+    toc: yes
+  html_notebook: 
+    toc: yes
+  
+editor_options: 
+  chunk_output_type: inline
+---
+
+<style>
+.btn {
+    padding: 6px 9px 4px;
+    border-width: 1px 1px 1px 1px;
+    background: linear-gradient(#EF4F34, #EB0586);
+    font-size: 12px;
+    font-weight: bold;
+    text-transform: uppercase;
+    color: #fff;
+    border-radius: 4px;
+}
+btn-default {
+    color: #fff;
+    background-color: #fff;
+    border-color: #fff;
+    border-width: 1px 1px 1px 1px;
+    border-radius: 4px;
+}
+.btn-default:hover, .btn-default:focus, .btn-group.open .dropdown-toggle.btn-default {
+    background:linear-gradient(#EF4F34, #EB0586);
+    border-color: #fff;
+    border-width: 0 1px 1px 1px;
+    color: #fff;
+    border-radius: 4px;
+}
+.Main {
+    padding-left: var(--sidebar-width);
+    padding-top: calc(var(--header-height) + 40px);
+    padding-bottom: 2rem;
+    background: #fff;
+}
+
+.list-group-item.active, .list-group-item.active:hover, .list-group-item.active:focus {
+    z-index: 2;
+    color: #ffffff;
+    background: linear-gradient(#EF4F34, #EB0586);
+    border-color: #EB0586;
+    border-radius: 4px;
+}
+#toc > ul li a {
+    display: block;
+    color: #EF4F34;
+    font-size: .9rem;
+    padding-left: 0;
+}
+a:focus, a:hover {
+    color: #EF4F34;
+    text-decoration: underline;
+}
+.Sidebar {
+    width: var(--sidebar-width);
+    background: #fff;
+    position: fixed;
+    top: var(--header-height);
+    bottom: 0;
+    z-index: 9;
+    overflow-y: auto;
+    padding: 40px 0 30px;
+    word-break: break-word;
+}
+
+.token.punctuation {
+    color: #F57FA3;
+}
+.page-content h1, .page-content h2, .page-content h3, .page-content h4, .page-content h5, .page-content h6 {
+    font-weight: 300;
+    line-height: 1.2;
+    color: #EF4F34;
+}
+
+.glyphicon {
+    position: relative;
+    top: 1px;
+    display: inline-block;
+    font-family: 'Glyphicons Halflings';
+    font-style: normal;
+    font-weight: 400;
+    line-height: 1;
+    color: #F57FA3;
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+}
+
+p {
+    font-size: 16px;
+    line-height: 24px;
+    margin: 0px 0px 12px 0px;
+}
+
+h1,h2{
+    font-family: Arial, sans-serif;
+    font-weight: 700;
+    color: #000;
+}
+
+h3, h4, h5, h6, legend {
+    font-family: Arial, sans-serif;
+    font-weight: 700;
+    color: #EF4F34;
+}
+.Content a, .page-content a, a {
+    color: #EB0586;
+    text-decoration: none;
+}
+
+element.style {
+    font-weight: bold;
+    color: #EF4F34 !important;
+}
+
+.tocify {
+    width: 20%;
+    max-height: 90%;
+    overflow: auto;
+    margin-left: 2%;
+    position: fixed;
+    border: 1px transparent;
+    border-radius: 6px;
+}
+.tocify .tocify-item a, .tocify .list-group-item {
+    padding: 5px 0;
+    border-radius: 4px;
+}
+.dropdown-menu {
+    position: absolute;
+    top: 100%;
+    left: 0;
+    z-index: 1000;
+    display: none;
+    float: left;
+    min-width: 160px;
+    padding: 5px 0;
+    margin: 2px 0 0;
+    list-style: none;
+    font-size: 14px;
+    text-align: left;
+    background:  linear-gradient(#fff, #fff) padding-box,
+      linear-gradient(to right, #EF4F34, #EB0586) border-box;
+    border: 1px solid transparent;
+    border: 1px solid transparent;
+    border-radius: 4px;
+    box-shadow: 0 6px 12px rgba(0,0,0,0.175);
+}
+table {
+    display: table;
+    border-collapse: separate;
+    border-spacing: 2px;
+    border-color: grey;
+    background:  linear-gradient(#fff, #fff) padding-box,
+      linear-gradient(to right, #EF4F34, #EB0586) border-box;
+    border: 2px solid transparent;
+    border-radius: 4px;
+}
+pre {
+    background:  linear-gradient(#fff, #fff) padding-box,
+      linear-gradient(to right, #EF4F34, #EB0586) border-box;
+    display: block;
+    margin: 0 0 10px;
+    font-size: 13px;
+    line-height: 1.42857143;
+    word-break: break-all;
+    word-wrap: break-word;
+    color: #333333;
+    background-color: #f5f5f5;
+    border-radius: 4px;
+    border: 2px solid transparent;
+}
+b, strong {
+    font-weight: bold;
+    color: #EF4F34;
+}
+</style>
+
+
+```{r,echo = FALSE, warning = FALSE, message = FALSE}
+library(data.table)
+library(dplyr)
+library(ggplot2)
+library(caret)
+library(kableExtra)
+library(gridExtra)
+library(grid)
+library(xgboost)
+library(caret)
+library(scales)
+ps_orange <- "#EF4F34"
+ps_pink <- "#F57FA3"
+ps_purple  <- "#EB0586"
+knitr::opts_chunk$set(message = FALSE, warning = FALSE)
+knitr::opts_chunk$set(fig.align = 'center')
+options(scipen = 999)
+htmltools::img(src = knitr::image_uri("~/Desktop/Content Strategy - Git Clones/content_strategy/brayden_ross/model_figures/PS_logo_F-01.png"), 
+               alt = 'logo', 
+               align = 'left',
+               style = 'position:relative; top:-5px; right:5px; 
+               padding:10px; width:250px;')
+model_dataset <- fread('/Users/brayden-ross/Desktop/Content Strategy Legacy Git Clones/content_strategy/brayden_ross/author_comp_modeling/updated_model_data.csv')
+airtight <- readRDS('~/Desktop/Content Strategy - Git Clones/author_compensation/video/video_comp_model/Model Training/xgb_mbo_tuned_airtight.RDS')
+ensemble_tuned <- readRDS('~/Desktop/Content Strategy - Git Clones/author_compensation/video/video_comp_model/Model Training/ensemble_tuned.RDS')
+cluster_cols <- grep("cluster_", colnames(model_dataset))
+month_cols <- grep("course_age_", colnames(model_dataset))
+q_cols <- grep("q_", colnames(model_dataset))
+model_dataset$cluster <- gsub(pattern = 'cluster_', x = colnames(model_dataset)[cluster_cols][apply(model_dataset[,..cluster_cols],1,which.max)], replacement = '')
+model_dataset$course_age <- gsub(pattern = 'course_age_', x = colnames(model_dataset)[month_cols][apply(model_dataset[,..month_cols],1,which.max)], replacement = '')
+model_dataset$course_q <- gsub(pattern = 'q_', x = colnames(model_dataset)[q_cols][apply(model_dataset[,..q_cols],1,which.max)], replacement = '')
+model_dataset <- model_dataset %>%
+  filter(view_time_perc != 0) %>%
+  arrange(course_name, as.numeric(course_age)) %>%
+  group_by(course_name) %>%
+  mutate(course_q = rep(1:8, each = 3, length.out = n()))
+```
+
+
+<br>
+
+<br>
+
+# Introduction
+
+Author Compensation represents the largest cash outflow for the Skills Organization at Pluralsight (PS). This cash outflow is necessary to keep the Content Library fresh and hydrated with relevant, interesting and applicable content to provide to learners. In order to balance author sentiment, market competitiveness and cost savings to PS, great care and examination has been taken in regards to the methodology used to assign Authors payment figures in their Scope of Work agreements.  
+
+Over the years the framework has adapted and evolved to improve model accuracy and leverage available data at PS. The overarching objective behind efforts towards improvement has and always will be to **fairly and accurately compensate Authors at Pluralsight**.
+
+Two aspects represent the sentiment behind this objective:
+
+* The desire to fairly compensate Authors for the content they create at Pluralsight in an effort to remain competitive in the Author market environment as well as gather and retain top talent in varying professional spaces.
+  + In a competitive tech education environment, unfairly compensating certain subgroups of Authors leads to a lack of diversity in the Content Library, as well as the risk of losing field experts in important and emerging areas of technology.
+* The objective to maximize cost savings to Pluralsight by accurately projecting the performance of a given piece of content. If this objective is met, it means that the content's performance will result in the Author earning the objective amount. 
+  + The internal amounts set are known as [Internal Targets](https://docs.google.com/document/d/1gzCaH9TFhjttLV-CEiYWH57fOogDvd5_RBAvMIYQBLU/edit?usp=sharing). They are        loosely based off of the amount of time it typically takes to produce video content for PS, and are thereby assigned based on course duration.
+  
+Based on these factors, accurately projecting a course's performance in the Content Library at PS can fulfill both of these OKRs by lowering excessive under and overpayment. Explored in this walk through are the data, features, algorithms, improvements and outcomes of the predictive modeling workflow used fulfill these objectives.
+
+# Identifying the Objective
+
+"Course Performance" is difficult to define at a scaled level, as niche content topics are not ingested as much as wider-scale technical learning areas. These niche content groups are just as important, as they allow PS to scale its offerings to new customer groups and remain adaptive in a dynamic tech world. 
+
+View time for a given piece of video content is tracked at PS on a daily basis. This offers an opportunity for predictive outcomes to be measured in terms of a course's view time. In order to scale the outcome across the content library the **percentage of total view time** that a course is responsible for is used as opposed to raw view time. This ensures that niche content groups aren't penalized for low viewership and can still receive fair compensation. 
+
+Aggregating the available data at the course level on a month-to-month basis gives a monthly view time percentage for a given piece of content. This is used as the outcome variable for our predictive modeling. If view time percentage over the lifespan of a course can be accurately measured, then appropriate compensation offers can be assigned that will theoretically cause the author to reach their compensation target.
+
+The mathematical equation utilized to determine the appropriate "Royalty Rate" (the share of attributable course revenue paid to the author) is as follows:
+<br>
+$$
+\mathbf{\text{Royalty  Rate}} = \frac{CompTarget}{\sum_{n=24}^i(\widehat{VT%} * Revenue)}
+$$
+Where *i* represents a given month over a 24 month period, and VT details the projected view time percentage. Based on the cost savings objective detailed previously, if the raw Royalty Rate falls outside the bounds of 6-15%, then it is localized within that range. This is done to ensure excessively large or small royalty rates are not assigned, resulting in minimal cost savings for PS and in some cases unfair compensation to authors. This range has been determined as a result of previous models and Author Compensation framework iterations and is subject to change should the accuracy of the model be large enough that misprojections would not result in large payouts that are undesirable given the current framework. One goal of increasing this range may be to more closely compensate niche content authors to their target figures. In addition, this range is dynamically scaled to match the financial growth of Pluralsight, ensuring that as revenues go up payments to authors remain solvent.
+
+# Data Sources and Feature Extraction
+
+Now that the outcome variable and the methods used to obtain the Royalty Rate from that outcome have been described, the data and features that are used to train the predictive model can be explored. 
+
+The Author Compensation framework presents a unique Machine Learning (ML) issue, as limited information about the content of a course or indicators on its performance are available at the time of inception. Typically a Project Coordinator (PC) obtains basic information from the Author about the course such as its duration, some of its key content ideas, and its location (if any) within a PS learning path. The limited amount of features available make it difficult to generate a large enough feature set to train confidently on, but thanks to large-scale developments by the Skills Organization, new features and modeling approaches have been identified that drive drastic increases in projection accuracy. 
+
+### Market Taxonomy
+
+Thanks to the VTO team and the wider Skills organization, the integration of the new **Market Taxonomy** tagging system presents huge advancements in the predictive capabilities of the view time model. Previously under the curriculum taxonomy, the tags assigned to courses which detailed their content and domain were not as informative to the models performance. What the curriculum taxonomy lacked, the Market Taxonomy improved on ten-fold; Simply from switching the feature set from using the curriculum taxonomy over to the market taxonomy resulted in an overall performance improvement of **38%** (Mean Absolute Error, or MAE was used to determine predictive accuracy). An improvement of this magnitude is significant to say the least, and allows even more insight into the types of content groups that perform differently than others. 
+
+Features used from the new Market Taxonomy are limited to what are known as **Level 1** and **Level 2** tags. Each content item is given a set of tags, containing levels 1-3, and multiple tag sets can be assigned to one piece of content. The nature of the tags is such that with each increasing level, the granularity of the content topic increases as well. Level 3 tags have the highest level of specificity, and as a result have been excluded from the features provided to the model. This is done to ensure the model does not **over fit**. Over fitting occurs when a model learns the detail and noise in the training data to the extent that it negatively impacts the performance of the model on new data. Including Level 3 tags is a prime example that could introduce risk of over fitting.
+
+Content pieces which have been assigned multiple sets of unique tags present an issue when it comes to feature selection, as one set of tags may be more informative than the other (a phenomena which can be visualized [here](https://rstudio-connect.pluralsight.com/connect/#/apps/532/access)). In lieu of developing a method to select the optimal set of tags, all *unique* tags between sets were aggregated for each course and used to train the algorithm.
+
+If a given piece of content was assigned two tag sets, both of which contained the same Level 1 tags but dissimilar Level 2 tags, only a singular Level 1 tag was used and both unique Level 2 tags were included. This ensures no redundancy in the information gain provided by tags while also leveraging the increased informativeness of the Market Taxonomy. Courses included in the analysis had anywhere between 1 and 9 individual sets of tags.
+
+Additional features provided to the model based on the Market Taxonomy tagging included:
+
+* Total Number of Tags: A summation of the unique level 1 and level 2 tags for a course
+    + Total Number of Level 1 Tags: The total number of unique level 1 tags for a course
+    + Total Number of Level 2 Tags: The total number of unique level 2 tags for a course
+* Tag Overlap (T/F): A binary indicator denoting whether there was any overlap between tag sets at either level
+
+```{r}
+lvl_1 <- model_dataset %>%
+  select(course_name, n_tags_lvl1) %>%
+  distinct() %>%
+  group_by(n_tags_lvl1) %>%
+  summarise(count_tags = n()) %>%
+  ggplot() + geom_col(aes(x=reorder(n_tags_lvl1, -count_tags), y = count_tags, fill = count_tags), 
+                      width = 0.5, position = position_dodge(0.4)) + theme_classic() + 
+  scale_fill_gradient2(low = ps_pink, mid = ps_purple, high = ps_orange, midpoint = 250) + theme(text = element_text(size = 15), legend.position = 'none') + 
+  ylab('Count') + xlab('Level 1 Tags') + scale_y_continuous(expand = c(0, 0), limits = c(0, 1600))
+lvl_2 <-  model_dataset %>%
+  select(course_name, n_tags_lvl2) %>%
+  distinct() %>%
+  group_by(n_tags_lvl2) %>%
+  summarise(count_tags = n()) %>%
+  ggplot() + geom_col(aes(x=reorder(n_tags_lvl2, -count_tags), y = count_tags, fill = count_tags), 
+                      width = 0.5, position = position_dodge(0.4)) + theme_classic() + 
+  scale_fill_gradient2(low = ps_pink, mid = ps_purple, high = ps_orange, midpoint = 250) + theme(text = element_text(size = 15), legend.position = 'none') + 
+  ylab(NULL) + xlab('Level 2 Tags') + scale_y_continuous(expand = c(0, 0), limits = c(0, 1600))
+
+grid.arrange(lvl_1, lvl_2, top = textGrob("Number of Tags for Level 1 and 2", gp=gpar(fontsize=18), vjust = 0.4), ncol = 2)
+```
+
+
+```{r}
+model_dataset %>%
+  select(n_tags_total, tag_overlap) %>%
+  group_by(n_tags_total, tag_overlap) %>%
+  distinct() %>%
+  summarise(count_n = n()) %>%
+  ggplot() + geom_col(aes(x = as.factor(n_tags_total), y = count_n, fill = as.factor(tag_overlap)), stat = 'identity') + labs(title = 'Overlap Between Tag Sets by Number of Tags') + 
+  scale_fill_manual(values = c(ps_orange, ps_pink), labels = c('No Overlap', 'Overlap'), name = NULL) + theme_classic() + scale_y_continuous(expand = c(0,0), limits = c(0,1400), breaks = seq(0,1400, 200)) + theme(text = element_text(size = 15)) + xlab('Number of Total Tags') + ylab('Count')
+```
+
+
+Due to the necessity of scaling the algorithm into production and the dynamic nature of tagging new content, a "master tag set" was developed and is used to generate a matrix of one-hot encoded variables relating to respective level 1 and level 2 tags. This results in a highly dimensional feature set (~ > 200 independent variables), but computation time and power are not of great concern in this instance as resources are available to increase the speed of the training process. The master tag set is used in the production workflow to compare against incoming content and its tags. 
+
+### Tag + View Time % Clustering
+
+When faced with the previously mentioned issue of multiple tag sets for a single piece of content, another approach identified in the exploratory data analysis (EDA) was that of clustering tag sets based on their view time %. While not used as a final method to address the multiple tag set issue, it was still informative as it gave an idea of which unique tags were grouped together or not grouped together in relation to their view time %. Utilizing *Gower* distance, which effectively measures the dissimilarities between observations allowing for continuous and categorical variables, the available data was clustered together and cluster numbers were assigned. The resulting algorithm is used in production to assign (based on the tags given to it) a course to an existing cluster. Leveraging statistical information and variance in the dataset, an optimal number of **45** clusters were chosen. These clusters are utilized as categorical variables within the training dataset, as one cluster is fundamentally different than another. 
+
+These clusters add an identifying layer to the model training set while still avoiding data leakage. Data leakage would occur if view time percentage indicators made their way into the training set through any number of feature combinations, and would indicate itself through large mis-projections on the training/holdout data. Clusters also give us an insight into determining the model's fit on uniquely different and similar course groups; A model with scaled accuracy across a large number of clusters would lead to confidence surrounding the model's ability to predict across dissimilar groups. Below are the clusters with the highest average view time, and as is evident there is significant differentiation across clusters when it comes to view time performance.
+
+```{r}
+model_dataset %>%
+  group_by(cluster) %>%
+  summarise(avg_vt = mean(view_time_perc)) %>%
+  dplyr::slice(1:15) %>%
+  ggplot() + geom_point(aes(x = reorder(cluster, -avg_vt), y = avg_vt, group = 1), color = ps_orange) + theme_classic() + 
+  geom_line(aes(x = reorder(cluster, -avg_vt), y = avg_vt, group = 1), color = ps_orange) + theme(text = element_text(size = 15),
+                                                                                    panel.grid.major = element_line(colour=rgb(235, 235, 235, 100, maxColorValue = 255), size=0.4)) +
+  xlab('Cluster') + ylab('Average VT %') + labs(title = 'Clusters with the Higest Average View Time %')
+```
+
+The most common clusters are shown below: 
+
+```{r}
+model_dataset %>%
+  select(course_name, cluster) %>%
+  distinct() %>%
+  select(-course_name) %>%
+  group_by(cluster) %>%
+  summarise(n_clust = n()) %>%
+  dplyr::slice(1:15) %>%
+  ggplot() + geom_col(aes(x=reorder(cluster, -n_clust), y = n_clust, fill = n_clust), 
+                      width = 0.5, position = position_dodge(0.6)) + theme_classic() + 
+  scale_fill_gradient2(low = ps_pink, mid = ps_purple, high = ps_orange, midpoint = 250) + theme(text = element_text(size = 15)) + 
+  theme(legend.position="none") + scale_y_continuous(expand = c(0, 0), limits = c(0, 600)) + ylab('# of Courses') + xlab('Cluster') + labs(title = 'Top 15 Clusters')
+```
+
+
+### Time Series Features
+
+Projecting course performance over a given period of 24 months determines that there should be features related to time series included in the training set. Based off examinations of previous model iterations which projected view time over 36 months, a noticeable decrease in precision accuracy occurred after 24 months. This being the case, the projection period was shortened to only 24 months rather than 36. Other time frames were explored to determine if there was any significant improvement over a month to month approach. Testing aggregations over a quarterly and bi-annual basis proved unfruitful, but were still informative in other areas that the monthly projection model lacked. This led to the addition of not just monthly model features but quarterly as well, as the model benefited from being able to delineate trends using both. 
+
+Before looking at the trend plots shown below, it is important to note that due to the nature of "Free April" (the month in which PS waives its subscription fee to new learners), the data for the view time during this period has been excluded.
+
+```{r}
+monthly <- model_dataset %>%
+  group_by(course_age) %>%
+  summarise(avg_vt = mean(view_time_perc)) %>%
+  ggplot() + geom_point(aes(x = as.numeric(course_age), y = avg_vt), color = ps_orange) + theme_classic() + scale_x_continuous(breaks = seq(0,24,3)) +
+  geom_line(aes(x = as.numeric(course_age), y = avg_vt), color = ps_orange) + theme(text = element_text(size = 15),
+                                                                                    panel.grid.major = element_line(colour=rgb(235, 235, 235, 100, maxColorValue = 255), size=0.4)) +
+  xlab('Month') + ylab(NULL) + labs(title = NULL, subtitle = NULL)
+
+quarterly <- model_dataset %>%
+  group_by(course_q) %>%
+  summarise(avg_vt = mean(view_time_perc)) %>%
+  ggplot() + geom_point(aes(x = as.numeric(course_q), y = avg_vt), color = ps_orange) + theme_classic() +
+  geom_line(aes(x = as.numeric(course_q), y = avg_vt), color = ps_orange) + theme(text = element_text(size = 15),
+                                                                                    panel.grid.major = element_line(colour=rgb(235, 235, 235, 100, maxColorValue = 255), size=0.4)) +
+  xlab('Quarter') + ylab(NULL) + labs(title = NULL, subtitle = NULL)
+
+grid.arrange(monthly, quarterly, ncol = 1, left = textGrob("Average VT %", rot = 90, vjust = 0.5, gp=gpar(fontsize=15)), top = textGrob("Average VT % Trends", gp=gpar(fontsize=18)))
+```
+
+Courses typically experience a large dropoff in view time after their third month/initial quarter, and thanks to the features generated above the model is able to decipher these trends.
+
+Future time series information will likely be added to the model, aiding in determining trends and patterns across weeks, months or during holidays. 
+
+### Projected View Time Quantile Group
+
+Through iterative testing, an approach that was considered was to move away from a regression output projecting a continuous view time percentage and rather classify the course into a performance "group". These groups could be extrapolated by determining the percentiles that separate monthly view time for the entire course library at PS. This would effectively task the model with projecting (for a given course in a given month) what percentile group the projected view time would likely fall under. 
+
+Eventually after testing this method, the accuracy levels weren't high enough to fully deprecate the regression approach but the findings were informative nonetheless. The percentile classification algorithm provided a unique way to introduce information to the model that could give enough of a signal to determine a general level of view time percentage in a given month. If for instance a course was projected to have view time in the 90th percentile group (the highest performers) during the 8th month of its lifespan, the model would use this information to generalize that the view time should be higher than if say a 20th percentile label was present. 
+
+Initially one may think this introduces a huge risk of data leakage into the model, but by transforming the percentile labels to a generalized *quantile* format, the model determines enough of a signal to inform its predictions without leakage occurring. This has been carefully examined and validated through holdout data predictions.
+
+Before taking this new classification algorithm into production to generate the quantile feature, careful consideration had to be applied to the misclassification rate of the model. High misclassification presents a large financial risk to PS, as a model that misidentified quantiles 1 and 5 frequently would under project high performing courses and over project low performers. This results in large royalty rates being assigned to high earners, leading to exorbitant overpayments. Misidentification between these important groups would in turn skew view time projections greatly.
+
+The classfication outcome was separated into 5 distinct groups, with group 5 representing the top 20th percentile of view time in a given month for all video library content at PS and groups 1-4 representing the rest of the percentile distribution accordingly. The algorithm known as eXtreme Gradient Boosting (xgboost) was chosen due to its ability to facilitate multi-class classification problems. 
+
+The features included in the quantile classification model included the **tags** assigned to content as well as the related features described previously, the **cluster** the course was assigned to, it's **average position in a path**, the **duration of the course in hours** and the **size of PS's video content library** in the given month. 
+
+Trained using cross validation to ensure scalability, the algorithm was tested on a holdout set of ~20000 observations. 
+
+```{r,echo = FALSE, warning = FALSE, message = FALSE, include=FALSE}
+xgb_quantile <- readRDS('~/Desktop/Content Strategy - Git Clones/content_strategy/brayden_ross/author_comp_modeling/quantile_xgb.RDS')
+c_list <- unique(model_dataset$course_name)
+train_size <- floor(0.7 * length(c_list))
+train_ind <- sample(seq_len(length(c_list)), size = train_size)
+
+test_data <- data.frame('course_name' = c_list[-train_ind])
+
+quant_class <- model_dataset[,-c(grep("course_age", colnames(model_dataset)))]
+quant_class <- quant_class %>%
+  ungroup() %>%
+  select(-q_1, -q_2, -q_3, -q_4, -published_date, -usage_year_month, -view_time_perc, -course_q, -cluster)
+xgb_test_data <- test_data %>%
+  left_join(quant_class, by = 'course_name') %>%
+  na.omit() %>%
+  dplyr::select(-course_name)
+test_matrix <- as.matrix(xgb_test_data[,-c(191)])
+test_lab <- xgb_test_data$quant_vt
+val_mat <- xgb.DMatrix(data = test_matrix, label = test_lab)
+numberOfClasses <-  length(unique(model_dataset$quant_vt))
+
+test_pred <- predict(xgb_quantile, newdata = test_matrix)
+
+test_prediction <- matrix(test_pred, nrow = numberOfClasses,
+                          ncol=length(test_pred)/numberOfClasses) %>%
+  t() %>%
+  data.frame() %>%
+  mutate(label = test_lab + 1,
+         max_prob = max.col(., "last"))
+
+conf_mat <- confusionMatrix(factor(test_prediction$max_prob),
+                factor(test_prediction$label),
+                mode = "everything")
+
+conf_mat <- data.frame("Preds" = c(1:5), as.matrix(conf_mat))
+colnames(conf_mat) <- c('Preds', c(1:5))
+for(i in 2:ncol(conf_mat)) {
+  j <- max(conf_mat[,i])
+  ind <- conf_mat[,i] == j
+  conf_mat[ind,i] <- conf_mat[ind,i] %>% cell_spec(bold = TRUE, color = ps_orange)
+}
+```
+
+The confusion matrix shown below visualizes the algorithms performance on the test data, and the misclassification among groups (notice the sparsity of observations in the lower left and upper right corners). The distribution of the confusion matrix below gives increased confidence that misclassification between high quantile view times and low quantile view times is highly unlikely in production. Based off of these findings, it is safe to assume that the model will scale to the entire dataset in a manner that both avoids data leakage and costly misclassification. 
+
+```{r}
+kbl(conf_mat, escape = F, caption = '<b>Confusion Matrix for Quantile VT Model<b>') %>%
+  column_spec(1, bold = TRUE) %>%
+  kable_styling(font_size = 15, full_width = F)
+```
+
+In addition to the accuracy of the model on the test set, we can infer that there is no large discrepancy between the predicted distribution of view time quantiles and the actual (see below):
+
+```{r}
+data.frame('Actual' = xgb_test_data$quant_vt, 'Predicted' = test_prediction$max_prob) %>%
+  melt(measure.vars = c('Actual', 'Predicted')) %>%
+  mutate(value = ifelse(variable == 'Actual', value + 1, value)) %>%
+  group_by(variable, value) %>%
+  summarise(count_n = n()) %>%
+  ggplot() +  geom_col(aes(x = as.factor(value), y = count_n, fill = as.factor(variable)),width = 0.5, position = 'dodge', stat = 'identity') + labs(title = 'Actual vs. Predicted VT Quantile Distribution') + 
+  scale_fill_manual(values = c(ps_orange, ps_pink), labels = c('Actual', 'Predicted'), name = NULL) + theme_classic() + scale_y_continuous(expand = c(0,0), limits = c(0,5000), breaks = seq(0,5000, 500)) + theme(text = element_text(size = 15)) + xlab('Quantile Group') + ylab('Count')
+```
+
+Digging deeper into the algorithm itself, we can gather some inference about what drives the classification predictions. Shown below are some of the most important features determined by the model:
+
+```{r}
+imp_ob <- xgb.importance(model = xgb_quantile)
+imp_ob %>%
+  dplyr::slice(1:15) %>%
+  ggplot() + geom_bar(aes(x = Gain, y = reorder(Feature, Gain), fill = Gain), stat = 'identity') + 
+  scale_fill_gradient(low = ps_pink, high = ps_orange) + guides(fill="none") + theme_classic() + 
+  theme(text = element_text(size = 15)) + ylab(NULL) + labs(title = 'Top 15 Features') + scale_x_continuous(expand = c(0,0))
+```
+
+```{r}
+quant_cor <- cor(quant_class[,-1])
+neg_cor <- as.data.frame(melt(quant_cor)) %>%
+  filter(!is.na(value), value != 1, value != 0) %>%
+  arrange(value) %>%
+  dplyr::slice(1:20) %>%
+  distinct(value,.keep_all = TRUE) %>%
+  rename('Variable 1' = 'Var1',
+         'Variable 2' = 'Var2',
+         'Corr. Value' = 'value')
+pos_cor <- as.data.frame(melt(quant_cor)) %>%
+  filter(!is.na(value), value != 1, value != 0) %>%
+  arrange(-value) %>%
+  dplyr::slice(1:20) %>%
+  distinct(value,.keep_all = TRUE) %>%
+  rename('Variable 1' = 'Var1',
+         'Variable 2' = 'Var2',
+         'Corr. Value' = 'value')
+kbl(neg_cor, escape = F, caption = '<b>Most Negatively Correlated Features<b>', label = c('Variable', NULL, 'Corr. Value')) %>%
+  column_spec(1:2, bold = TRUE) %>%
+  kable_styling(font_size = 15, full_width = F)
+kbl(pos_cor, escape = F, caption = '<b>Most Positively Correlated Features<b>', label = c('Variable', NULL, 'Corr. Value')) %>%
+  column_spec(1:2, bold = TRUE) %>%
+  kable_styling(font_size = 15, full_width = F)
+```
+
+These feature correlations are similar for the final model, but give valuable insight into things like cluster 1 and creative tools tags driving negative correlation in quantile view time class groups. It should be noted here as well that best practices in ML dictate that highly correlated independent features should be removed due to redundancy, but this is mostly to save training time and resources. Both of these factors are not currently of great concern, and in the interest of scaling into production all features were included in the final training set.
+
+### The Outcome Variable
+
+View time percentage is a unique outcome variable, as the values it contains can be incredibly skewed. This occurs due to the nature of video content ingestion at PS; Specific content areas are viewed in greater mass than others simply because of their instructional topics. For instance, Developers are interested in key areas of improvement, and unless tasked with learning a new unique technology will view courses such as fundamentals, big picture and refreshers. This presents a difficult outcome for an ML algorithm to predict, as view time is not normally distributed across the course library. Taking a look at the distribution below, we can see that it is incredibly right-skewed (the dotted line represents the average view time % for the dataset):
+
+```{r}
+model_dataset %>%
+  filter(view_time_perc < 0.03) %>%
+  ggplot() + geom_histogram(aes(x = view_time_perc, fill = ..count..), bins = 100) + theme_classic() + geom_vline(xintercept = mean(model_dataset$view_time_perc), linetype = 'dashed', alpha = 0.5) + ylab('Count') + xlab('View Time %') + scale_fill_gradient2(low = ps_pink, mid = ps_purple, high = ps_orange, midpoint = 10000) + theme(text = element_text(size = 15), legend.position = 'none')
+```
+
+In order to avoid skewness in the predictions a log transformation was performed on the outcome variable. This normalizes the distribution and allows for more robust projections using the available features. Once the the model has been applied to incoming data, predictions are exponentiated to return the raw projected view time percentage. The transformed distribution is shown below:
+
+```{r}
+model_dataset %>%
+  ggplot() + geom_histogram(aes(x = log(view_time_perc), fill = ..count..), bins = 100) + 
+  theme_classic() + ylab('Count') + xlab('Log View Time %') + scale_fill_gradient2(low = ps_pink, mid = ps_purple, high = ps_orange, midpoint = 1500) + theme(legend.position = 'none', text = element_text(size = 15))
+```
+
+The algorithm is now better tasked to perform relevant view times across course performance groups, and will avoid things like negative view time % predictions which would skew the royalty rates assigned by the model significantly.
+
+# Algorithm Selection + Training
+
+Earlier iterations of the algorithm developed by the Author Compensation team used an Ordinary Least Squares regression (OLS) model to project the view time percentage for incoming content. OLS was chosen after testing ensembles of random forests and OLS algorithms among other regression techniques. Thanks to new features developed by the Skills organization and algorithmic tuning techniques, a number of powerful algorithms were now viable for projecting course view time. These new algorithms allowed for greater control over the model parameters themselves, as well as increased capability to handling large feature sets efficiently.
+
+Because market taxonomy tags provide differentiation between subject matters in the course library and give insight into specific areas of technical expertise contained in the course, the tags were treated as factor variables (a single level 1 Software tag is fundamentally different than a level 1 IT Ops tag). Factor variables such as these result in an exponential increase in dimensionality in the feature set. Things such as tree-wise methods using Random Forest algorithms and OLS regression techniques are incapable of handling training data of this size. However, tree based methods are still available that can leverage computing power to handle training operations while still producing robust algorithms. One in particular that has been famous for [winning numerous Kaggle Competitions](https://dataaspirant.com/xgboost-algorithm/) is XGBoost. XGBoost utilizes gradient boosting techniques to speed up its operations, as well as leveraging things such as parallelization, block structure learning, and hyperparameter tuning. These feature were key in developing a robust prediction algorithm, especially that of hyperparamter tuning.
+
+Thanks to the hyperparameters available in XGBoost, a training data set of this size and dimensionality can be used to its fullest capacity while still taking measures to avoid overfitting. In order to maximize the capabilities of hyperparameter tuning, Model Based Optimization (MBO) was implemented to determine the best range of hyperparameters to test while still preserving computing power and time. 
+
+### Model Based Optimization
+
+MBO is similar in some ways to grid search methods but dissimilar in others. Continuous ranges of parameters are set rather than discrete sets, and most important the information from early iterations of tuning runs is used to inform the performance and selection of future parameter selection. Early test are effectively used to determine which parameter ranges are sutiable and which are not, and based on this information optimization steps are run with the most promising ranges of hyperparameters. All of this is done through a series of automated steps, aided by packages related to *kriging* processes and other optimization methods.
+
+For the current training portion of the model, 15 search steps were performed with 10 optimization steps. Each step trains for 2000 rounds and uses 5-fold cross validation to avoid overfitting. The algorithm is tasked with minimizing the Root-mean-square deviation (RMSE), and utilizes hyperparameters such as learning rate, sample portions at each tree split, tree depth limits, and more. 
+
+Shown below are the results of the hyperparameter optimization runs:
+
+```{r}
+xgb_runs <- readRDS('~/Desktop/Content Strategy - Git Clones/content_strategy/brayden_ross/author_comp_modeling/xgb_updated_runs.RDS')
+xgb_runs$plot + theme_bw() + scale_color_manual(name=NULL,labels = c('Search', 'Optimization'), values = c(ps_pink,ps_orange)) + theme(text = element_text(size = 15)) + ylab('RMSE') + labs(title = 'MBO Runs') + theme(legend.position = 'bottom')
+```
+
+Round 15 seems to be the highest performer, and thanks to the packages and methods used above the model optimization is automated to return the best hyperparameter set to be used in final training. The optimal hyperparameters are as follows:
+
+```{r}
+best_params <- readRDS('~/Desktop/Content Strategy - Git Clones/author_compensation/video/video_comp_model/Model Training/xgb_mbo_24_params.RDS')[-10]
+as.data.frame(best_params[1:11]) %>%
+  melt() %>%
+  select(variable, value) %>%
+  mutate(value = round(value, 2)) %>%
+  rename('Hyperparameter' = 'variable', 'Tuned Value' = 'value') %>%
+  kbl() %>%
+  kable_styling(font_size = 15, full_width = F)
+```
+
+The tree depth may look a bit large but this is again due to the high dimensionality of the feature set. Given more freedom to add depth to the tree based training method, the model performs increasingly well as it is able to split observations based on more tag combinations. 
+
+# Final Model Performance on Test Data
+
+```{r, include = FALSE}
+pred_test_data <- test_data %>%
+  left_join(model_dataset, by = 'course_name') %>%
+  na.omit() %>%
+  filter(view_time_perc != 0) %>%
+  dplyr::select(-cluster,-quant_vt, -course_age, -course_q) %>%
+  mutate(quant_vt = as.factor(test_prediction$max_prob - 1),
+         log_view_time_perc = log(view_time_perc))
+
+setDT(pred_test_data)
+
+test_targets <- pred_test_data$log_view_time_perc
+
+test_matrix <- model.matrix(~.+0,data = pred_test_data[,-c(1:3, 6, 224)]) 
+dtest <- xgb.DMatrix(data = test_matrix, label = test_targets)
+
+pred_test_data$ensemble <- exp(predict(ensemble_tuned, newdata = test_matrix))
+pred_test_data$predictions <- exp(predict(object = airtight, newdata = dtest))
+pred_test_data$resids <-  pred_test_data$view_time_perc - pred_test_data$predictions
+pred_test_data$ens_resids <- pred_test_data$view_time_perc - pred_test_data$ensemble
+mae_final <- round(MAE(pred = pred_test_data$predictions, obs = pred_test_data$view_time_perc), 7)
+rmse_final <- round(RMSE(pred = pred_test_data$predictions, obs = pred_test_data$view_time_perc), 7)
+mae_improve <- round((abs(mae_final - 0.0005719)/ 0.0005719) * 100, 2)
+ens_mae <- round(MAE(pred = pred_test_data$ensemble, obs = pred_test_data$view_time_perc), 7)
+ens_rmse <- round(RMSE(pred = pred_test_data$ensemble, obs = pred_test_data$view_time_perc), 7)
+pred_test_data <- pred_test_data %>%
+  mutate(`Quantile Group` = as.factor(test_prediction$max_prob))
+test_features <- test_data %>%
+  left_join(model_dataset, by = 'course_name') %>%
+  na.omit() %>%
+  dplyr::select(cluster,course_age, course_q)
+pred_test_data <- cbind(pred_test_data, test_features)
+
+melted_predictions <- melt(pred_test_data[,c(1,4,6,225:226, 229:232)], measure.vars = c('predictions', 'ensemble'))
+melted_predictions <- melted_predictions %>%
+  mutate(variable = ifelse(variable == 'predictions', 'XGBoost', 'Ensemble'),
+         resids = view_time_perc - value)
+```
+
+
+Using the final set of hyperparameters above, the final iteration of the model was trained using cross validation to continually ensure overfitting didn't occur. The performance of the new model greatly outweighed that of previous iterations. This represents a huge leap forward for Author Compensation and Pluralsight as whole, as the outflow of compensation to authors is the Skills division's biggest expense. Being able to more accurately project content performance leads to more suitable compensation offers being assigned as well as fairness for authors who publish their content at PS. 
+
+In terms of actual error, for a test set of data the algorithm's mean absolute error was **`r mae_final`**, with an RMSE value of **`r rmse_final`**. This means that on average, the model is only approximately `r mae_final` points away from the actual view time percentage of a course in a given month. In terms of performance improvement over previous models, this newly tuned XGBoost algorithm performs **`r paste0(mae_improve, '%')`** better than historical versions (Overall MAE for the same test set of courses was used to compare model performance). 
+
+This greatly increases the proximity to actual view time percentage, well within a range that gives confidence in the final general performance outlook for a course. These are the types of improvements that were sought out at the onset of the Author Compensation prediction issue, as proximity ensures greater cost savings to Pluralsight.
+
+The variable importance of the final model gives insight into some of the drivers of view time percentage at Pluralsight, below are some of the most important features:
+
+```{r}
+xgb_imp <- xgb.importance(model = airtight)
+xgb_imp %>%
+  dplyr::slice(1:15) %>%
+  ggplot() + geom_bar(aes(x = Gain, y = reorder(Feature, Gain), fill = Gain), stat = 'identity') + 
+  scale_fill_gradient(low = ps_pink, high = ps_orange) + guides(fill="none") + theme_classic() + 
+  theme(text = element_text(size = 15)) + ylab(NULL) + labs(title = 'Top 15 Features') + scale_x_continuous(expand = c(0,0))
+```
+
+The intention behind introducing the quantile for view time into the model had the desired effect, with quantiles 1 and 5 (0 and 4 in the modeling due to the algorithm parameter requirements), being the most important features used in projecting view time percentage. This gives signal to the model about a range in which to project the view time, and the other quantiles are used to further delineate what ranges or general regions of view time to predict. This type of feature generation is invaluable due to the cost savings it introduces for PS.
+
+Further examining specific areas of performance, determining the scalability of accuracy across different groups is paramount. If the model performs well across different quantile groups then the confidence in avoiding misprojection increases even more so:
+
+```{r}
+pred_test_data %>%
+  group_by(`Quantile Group`) %>%
+  summarise(`Average View Time %` = mean(view_time_perc),
+            `Average Prediction` = mean(predictions),
+            `MAE` = MAE(predictions, obs = view_time_perc),
+            `RMSE` = RMSE(predictions, obs = view_time_perc),
+            `# of Observations` = n()) %>%
+  kbl() %>%
+  kable_styling(font_size = 15, full_width = F)
+```
+
+The error metrics seem to increase steadily until quantile group 5 (the high performing courses), which raises concern dependent upon where the error lies. Mean absolute error doesn't give insight as to the direction of the error, which in this case is key as *over projection* would lead to lower royalty rate percentages, whereas *under projection* would lead to higher ones. For quantile group 5, a bias towards *over projection* is desirable as this ensures those courses are given lower percentage royalty rates. If under projection were present in this group, some of the highest performing courses at PS would be assigned royalty rates as high as 15%, leading to gross overpayments and minimal cost savings.
+
+Taking a look at the quantile group 5 residuals (actual view time - predicted view time), the direction of the error can be examined:
+
+```{r}
+pred_test_data %>%
+  #Outliers are removed for visualization
+  filter(`Quantile Group` == 5, view_time_perc < 0.0015) %>%
+  ggplot() + geom_point(aes(x = view_time_perc, y = resids), color = ps_orange, alpha = 0.5) + theme_classic() + geom_hline(yintercept = 0, linetype = 'dashed', alpha = 0.3) + ylab('Residuals') + xlab('Actual View Time Percentage') + labs(title = 'Residuals for Quantile Group 5') + theme(text = element_text(size = 15))
+```
+
+The graph depicts desirable behavior; For quantile group 5, courses with high amounts of actual view time are being well over projected thereby resulting in lower royalty rate percentages to be assigned. This trend leads to higher cost savings for PS, and many of the projected values in this cluster are aggregated near 0 on the y-axis indicating accurate projection by the model.
+
+Referring back to the previous table showing the average view time along side the average predicted value, we can see that the average more than doubles for predicted view time in group 4 to group 5. Anomalies are difficult to integrate and predict in machine learning, and the average actual view time reflects that the courses in this quantile are some of the highest performers among the test set. Because of the nature of the content library, certain courses may inexplicably be viewed a greater amount of times than anticipated. This is where the unavoidable error in predictive modeling introduces itself, and thanks to this phenomena we can rest assured that the accuracy gain in the model is translatable in production environments.
+
+To further illustrate this, the residuals of the other 4 quantile groups can be seen below:
+
+```{r}
+pred_test_data %>%
+  #Outliers are removed for visualization
+  filter(`Quantile Group` != 5, view_time_perc < 0.0015) %>%
+  ggplot() + geom_point(aes(x = view_time_perc, y = resids, color = `Quantile Group`), alpha= 0.5) + scale_color_manual(values = seq_gradient_pal(ps_orange, ps_purple)(seq(0,1,0.25)), name = '') + facet_wrap(~`Quantile Group`) + theme_classic() + theme(legend.position = 'none', text = element_text(size = 15), panel.spacing.x = unit(8, "mm")) + geom_hline(yintercept = 0, linetype = 'dashed', alpha = 0.3) + ylab('Residuals') + xlab('View Time %') + labs(title = 'Residual Performance for Quantile Groups 1-4')
+```
+
+While there still remain some outliers depicting underprediction, the majority of the observations are aggregated near 0 (the predicted value is very close to the actual view time). The problem of author compensation is not how accurately we can predict the view time, but how much of a detailed idea we can garner based on predictions of how the course will perform at PS. As has been stated many times, increased confidence in that general idea leads to maximized cost savings. In addition, some instances even warrant a desire for underprediction; Niche content areas that are not viewed in large amounts should be assigned higher royalty rates, and a model that underpredicts low view time areas drives royalty rates even higher for these authors. If not given the maximum royalty percentage many of these authors would not reach their compensation goal set by PS.
+
+Error across time is another important area to examine, looking below we can see the performance of the model across the different time periods tracked in the training set:
+```{r}
+monthly_error <- pred_test_data %>%
+  group_by(course_age) %>%
+  summarise(sum_res = MAE(pred = predictions, obs = view_time_perc)) %>%
+  ggplot() + geom_point(aes(x = as.numeric(course_age), y = sum_res), color = ps_orange) + theme_classic() + scale_x_continuous(breaks = seq(0,24,3)) + 
+  geom_line(aes(x = as.numeric(course_age), y = sum_res), color = ps_orange) + theme(text = element_text(size = 15),
+                                                                                    panel.grid.major = element_line(colour=rgb(235, 235, 235, 100, maxColorValue = 255), size=0.4)) +
+  xlab('Month') + ylab(NULL) + labs(title = NULL, subtitle = NULL)
+
+quarterly_error <- pred_test_data %>% 
+  group_by(course_q) %>%
+  summarise(sum_res =  MAE(pred = predictions, obs = view_time_perc)) %>%
+  ggplot() + geom_point(aes(x = as.numeric(course_q), y = sum_res), color = ps_orange) + theme_classic() +
+  geom_line(aes(x = as.numeric(course_q), y = sum_res), color = ps_orange) + theme(text = element_text(size = 15),
+                                                                                    panel.grid.major = element_line(colour=rgb(235, 235, 235, 100, maxColorValue = 255), size=0.4)) +
+  xlab('Quarter') + ylab(NULL) + labs(title = NULL, subtitle = NULL)
+
+grid.arrange(monthly_error, quarterly_error, ncol = 1, left = textGrob("MAE", rot = 90, vjust = 0.5, gp=gpar(fontsize=15)), top = textGrob("MAE Over Time", gp=gpar(fontsize=18)))
+```
+
+It seems the algorithm struggles to localize on how a course will perform in its first month or quarter. However this follows logic as the first month or quarter of a course is the most variable period in its life cycle, where it garners its most view time. A model that could project the first month of view time would have incredible informative power but unfortunately it isn't likely that a model could be trained with enough confidence to fulfill that job. As time goes on however the model becomes increasingly more accurate as is depicted with the decreasing mean absolute error. The model also captures a high level of accuracy between 3-6 months as well as the 2nd quarter of its life cycle, which for the purposes of Author Compensation gives enough of a signal to assign a compensation target confidently.
+
+### Exploring Ensemble Methods
+
+Using the information from the original OLS model used in production, it was thought that perhaps using an ensemble of the XGBoosts increased granular accuracy and the OLS's tendency to overproject may be optimal to smooth error during early months in the life cycle. Examining error metrics across different groups gives insight into whether or not this theory was correct:
+
+```{r}
+melted_predictions %>%
+  group_by(`Quantile Group`, variable) %>%
+  summarise(`Average View Time %` = mean(view_time_perc),
+            `Average Prediction` = mean(value),
+            `MAE` = MAE(value, obs = view_time_perc),
+            `RMSE` = RMSE(value, obs = view_time_perc)) %>%
+ ggplot() + geom_line(aes(x = `Quantile Group`, y = `MAE`, color = variable, group = variable)) + theme_classic() + scale_color_manual(values = c(ps_orange, ps_purple), name = 'Model') + geom_point(aes(x = `Quantile Group`, y = `MAE`, color = variable, group = variable)) + labs(title = 'Model MAE Comparison Across Quantiles') + theme(text = element_text(size = 15)) + theme(legend.position = 'bottom')
+```
+
+The ensemble method using an OLS on top of the XGBoost has a higher error rate across all quantile groups, but once again the direction of the error matters more than the magnitude for groups such as quantile 5. 
+
+```{r}
+melted_predictions %>%
+  filter(`Quantile Group` == 5, view_time_perc < 0.0015) %>%
+  ggplot() + geom_point(aes(x = view_time_perc, y = resids, color = variable), alpha = 0.5) + theme_classic() + geom_hline(yintercept = 0, linetype = 'dashed', alpha = 0.3) + ylab('Residuals') + xlab('Actual View Time Percentage') + labs(title = 'Residuals for Quantile Group 5') + theme(text = element_text(size = 15), panel.spacing.x = unit(8, "mm")) + facet_wrap(~variable) + scale_color_manual(values = c(ps_orange, ps_purple)) + theme(legend.position = 'none')
+```
+
+The majority of observations under the ensemble are overpredicted for lower view times, whereas the XGBoost model overpredicts across all view time ranges at a general level. Where the error lies in the ensemble method is with the other quantiles, shown below:
+
+```{r}
+melted_predictions %>%
+  filter(`Quantile Group` != 5, variable == 'Ensemble', view_time_perc < 0.0015) %>%
+  ggplot() + geom_point(aes(x = view_time_perc, y = resids, color = variable), alpha= 0.3) + facet_wrap(~`Quantile Group`, ncol = 2) + theme_classic() + theme(legend.position = 'none', text = element_text(size = 15), panel.spacing.x = unit(8, "mm")) + geom_hline(yintercept = 0, linetype = 'dashed', alpha = 0.3) + ylab('Residuals') + xlab('View Time %') + labs(subtitle = 'Ensemble', title = NULL) + scale_color_manual(values = c(ps_orange)) + theme(legend.position = 'none')
+melted_predictions %>%
+  filter(`Quantile Group` != 5, variable == 'XGBoost', view_time_perc < 0.0015) %>%
+  ggplot() + geom_point(aes(x = view_time_perc, y = resids, color = variable), alpha= 0.3) + facet_wrap(~`Quantile Group`, ncol = 2) + theme_classic() + theme(legend.position = 'none', text = element_text(size = 15), panel.spacing.x = unit(8, "mm")) + geom_hline(yintercept = 0, linetype = 'dashed', alpha = 0.3) + ylab('Residuals') + xlab('View Time %') + labs(subtitle = 'XGBoost', title = NULL) + scale_color_manual(values = c(ps_purple)) + theme(legend.position = 'none')
+```
+
+The XGBoost model outperforms the Ensemble significantly for the other quantiles which are arguable more important as this is a pseudo indicator for the model's scalability. Quantile 5 accuracy denotes the model's abilty to detect anomalies and outliers, but accuracy amongst the other 4 quantiles show how well it scales to the majority of content at PS. For this reason the XGBoost is the clear choice.
+
+The month-to-month average error and quarterly error metrics illustrate this further: 
+
+```{r}
+monthly_error <- melted_predictions %>%
+  group_by(course_age, variable) %>%
+  summarise(sum_res = MAE(pred = value, obs = view_time_perc)) %>%
+  ggplot() + geom_point(aes(x = as.numeric(course_age), y = sum_res, color = variable)) + theme_classic() + scale_x_continuous(breaks = seq(0,24,3)) + 
+  geom_line(aes(x = as.numeric(course_age), y = sum_res, color = variable)) + theme(text = element_text(size = 15),
+                                                                                    panel.grid.major = element_line(colour=rgb(235, 235, 235, 100, maxColorValue = 255), size=0.4)) +
+  xlab('Month') + ylab(NULL) + labs(title = NULL, subtitle = NULL) + scale_color_manual(values = c(ps_orange, ps_purple)) + theme(legend.position = "none")
+
+quarterly_error <- melted_predictions %>%
+  group_by(course_q, variable) %>%
+  summarise(sum_res = MAE(pred = value, obs = view_time_perc)) %>%
+  ggplot() + geom_point(aes(x = as.numeric(course_q), y = sum_res, color = variable)) + theme_classic() + scale_x_continuous(breaks = seq(0,8,1)) + 
+  geom_line(aes(x = as.numeric(course_q), y = sum_res, color = variable)) + theme(text = element_text(size = 15),
+                                                                                    panel.grid.major = element_line(colour=rgb(235, 235, 235, 100, maxColorValue = 255), size=0.4)) +
+  xlab('Quarter') + ylab(NULL) + labs(title = NULL, subtitle = NULL) + scale_color_manual(values = c(ps_orange, ps_purple), name = NULL) + theme(legend.position = 'bottom')
+
+grid.arrange(monthly_error, quarterly_error, ncol = 1, left = textGrob("MAE", rot = 90, vjust = 0.5, gp=gpar(fontsize=15)), top = textGrob("MAE Over Time", gp=gpar(fontsize=18)))
+```
+
+The Ensemble method, while promising in theory, doesn't outperform the base XGBoost model. Further tuning approaches may be taken to increase the smoothing of early life cycle error, but OLS combination simply skews the error rate too much. Potential for further model changes may be found in taking a closer look at the initial months of the course life cycle. New features may be added, and many are planned in the near future such as ones related to Market Demand using the Market Taxonomy, internal demand metrics, and content freshness cycle metrics.
+
+Other algorithms were explored and tested, but due to its performance power and use of user-friendly hyperparameter tuning, the XGBoost algorithm is still the best choice. Future iterations may test neural networks, Light GBM models and more.
+
+The algorithm is retrained on a monthly basis to ensure effectiveness. As mentioned the technology space is an ever-changing environment when it comes to what is in demand, and by re-training the algorithm with new monthly data these trends are able to be captured regularly. 
+
+# Financial Outcomes
+
+```{r, include = FALSE}
+course_aggregate <- pred_test_data %>%
+  dplyr::group_by(course_name, published_date) %>%
+  dplyr::summarise(duration_in_hours = unique(ceiling(duration_in_hours * 4) / 4),
+                   actual_vt = sum(view_time_perc), 
+                   pred_total = sum(predictions))
+rev_data <- fread('/Users/brayden-ross/Desktop/Content Strategy - Git Clones/content_strategy/brayden_ross/author_comp_modeling/rev_data.csv')
+rev_data <- rev_data %>%
+  dplyr::mutate(month = usage_year_month) %>%
+  dplyr::select(-usage_year_month)
+rev_data <- rev_data %>%
+  dplyr::select(royalty_revenue) %>%
+  na.omit() %>%
+  mutate(course_age =as.character(1:n()))
+comp_targets <- fread('/Users/brayden-ross/Desktop/Content Strategy - Git Clones/content_strategy/brayden_ross/author_comp_modeling/comp_targets.csv')
+royalty_rates <- pred_test_data %>%
+  left_join(rev_data, by = 'course_age') %>%
+  mutate(predicted_attr_rev = (predictions * royalty_revenue),
+         actual_attributable_revenue = (view_time_perc * royalty_revenue))
+rr_plotting <- royalty_rates
+royalty_rates <- royalty_rates %>%
+  group_by(course_name, published_date) %>%
+  summarise(total_pred_rev = sum(predicted_attr_rev),
+            total_actual_rev = sum(actual_attributable_revenue)) %>%
+  dplyr::select(course_name, published_date, total_pred_rev, total_actual_rev)
+new_rr <- course_aggregate %>%
+  left_join(comp_targets, by = 'duration_in_hours') %>%
+  left_join(royalty_rates, by = c('course_name', 'published_date')) %>%
+  mutate(pred_rr_raw = (compensation_target/total_pred_rev),
+         pred_rr = ifelse(pred_rr_raw > .15, .15, ifelse(pred_rr_raw < 0.06, 0.06, pred_rr_raw)),
+         desired_compensation = compensation_target/24)
+rr_plotting <- rr_plotting %>%
+  left_join(new_rr[,c(1:2, 10:11)], by = c('course_name','published_date')) %>%
+  mutate(pred_pmt = predicted_attr_rev * pred_rr,
+         actual_pmt = actual_attributable_revenue * pred_rr,
+         desired_compensation = desired_compensation)
+```
+
+### Royalty Rates
+
+The most important aspect of tuning and increasing the performance of the predictive model is driving increased cost savings from Author Payments. The mission of the Author Compensation team is **"...to fairly and accurately compensate authors..."**. The internal targets set by Pluralsight give insight as to how well a new model fits the financial payment goals for each course; The closer a model compensates authors to the target amount the more robust it is. Historically there has been a bias to over pay authors at PS in an effort to remain competitive in the author space, and while this is still the case, the amount of overpayment historically has been unsustainable. Overpayment towards niche content authors is acceptable, but high performers being overpaid costs PS millions of dollars a year. The new algorithmic framework aims to lower this overall payment amount significantly while still remaining slightly above the target amount.  
+
+Extrapolating the royalty rates for each respective course using the calculation mentioned in [Identifying the Objective], the distribution across the entire test set can be seen below:
+
+
+```{r}
+rr_plotting %>%
+  ggplot() + geom_histogram(aes(x = pred_rr), fill = ps_orange, bins = 10) + theme_classic() + theme(text = element_text(size = 15)) + xlab('Predicted Royalty Rate') + ylab('Count') + labs(title = 'Distribution of Royalty Rates') + scale_x_continuous(breaks = c(seq(0.06, 0.15, 0.03)))
+```
+
+A significant portion of rates still fall at the minimum and maximum royalty rates of 6 and 15 percent, with a smaller distribution of rates falling between these ranges. Because of the nature of the calculation, the minimum and maximum are frequently selected because the raw royalty rate calculation falls outside of these bounds. In order to reach the targeted compensation levels, courses frequently require rates outside this range. The localization of the rates at the minimum and maximum is acceptable as long as the rates scale correctly across quantile groups. A majority of rates at 15% for high performers (quantile group 5) would be *disastrous* as the highest payments would be allocated to the highest performers.
+
+Below the distribution of rates among quantiles are shown:
+
+```{r}
+rr_plotting %>%
+  ggplot() + geom_histogram(aes(x = pred_rr, fill = `Quantile Group`, group = `Quantile Group`), bins = 10) + scale_fill_manual(values = seq_gradient_pal(ps_orange, ps_purple)(seq(0,1,0.2)), name = '') + theme_classic() + facet_wrap(~`Quantile Group`) + theme(legend.position = 'none', panel.spacing.x = unit(2, "mm"), text = element_text(size = 12)) + xlab('Predicted Royalty Rate') + ylab('Count') + labs(title = 'Royalty Rate Distribution Across Quantile Groups') + scale_x_continuous(breaks = c(seq(0.06, 0.15, 0.03)))
+```
+
+The visualization supports the organizational and financial objectives of PS, with the highest concentration of 15% royalty rates belonging to the low-performers in quantile 1 and the 6% royalty rate concentration falls to the 5th quantile group. Additionally, the concentrations scale accordingly as the quantile groups increase, which ensures all quantile groups are typically assigned desirable rates. 
+
+### Author Payments Using Predicted Rates
+
+Taking the total actual attributable revenue for each course and multiplying it by the predicted royalty rate, we can determine the proximity to the desired level of overall compensation. The closer the amounts are together, the more accurate the payments to authors. If the total desired amount minus the actual amount results in a negative number, then the model has projected an overall *overpayment* to authors and *underpayment* vice versa. A a graph depicting the proximity payment amounts across quantile groups is shown below:
+
+
+```{r}
+rr_plotting %>%
+  group_by(course_name, `Quantile Group`) %>%
+  summarise(total_pred_pmt = sum(pred_pmt),
+            total_actual_pmt = sum(actual_pmt),
+            total_desired = sum(desired_compensation),
+            abs_error = abs(total_desired - total_pred_pmt),
+            error = total_desired - total_pred_pmt) %>%
+  #Filtered to show the distribution surrounding the maximum target payment value
+  filter(abs_error < 42000) %>%
+  ggplot() + geom_histogram(aes(x = error, fill = `Quantile Group`)) + facet_wrap(~`Quantile Group`) + theme_classic() + geom_vline(xintercept = 0, linetype = 'dashed', alpha = 0.5) + theme(text = element_text(size = 12), panel.spacing.x = unit(8, "mm"), legend.position = 'none') + scale_fill_manual(values = seq_gradient_pal(ps_orange, ps_purple)(seq(0,1,0.2)), name = '') + xlab('Total Desired Payment - Actual') + ylab('Density') + labs(title = 'Payment Proximity Across Quantile Groups')
+```
+
+Quantile group 1 shows a trend towards underpayment, however this doesn't necessarily raise much concern as courses in quantile group 1 are unlikely to reach the target level of compensation due to their low viewership. Rates outside of the allowable range would be required for these types of courses to reach their target level of compensation. Similarly with quantile group 5, rates below the minimum allowable range would be required to minimize the amount of overpayment to authors. Due to the nature of Author Compensation's goal at PS, these ranges for the time being are unchangeable but with increasing accuracy in projections this may change. An overall trend towards 0 (actual payment is close to targeted payment) is shown for groups 2-3, which depicts desirable behavior. 
+
+
+At the course level, examining the over/underpayment for individual pieces of content is another facet of the analysis. The figure shown below depicts the relationship between the actual and desired compensation levels on a course-by-course basis, with the dotted line representing a 1:1 relationship between the two. 
+
+```{r}
+rr_plotting %>%
+  group_by(course_name) %>%
+  summarise(`Total Desired Amount` = sum(desired_compensation, na.rm = TRUE),
+            `Total Payment Amount` = round(sum(actual_pmt, na.rm = TRUE)),
+            `Difference` = abs(`Total Desired Amount` - `Total Payment Amount`),
+            `Over/underpayment` = ifelse(`Total Desired Amount` < `Total Payment Amount`, 'Overpayment', 'Underpayment'),
+            `Total VT %` = sum(view_time_perc)) %>%
+  #Outlier courses with view time anomalies excluded
+  filter(`Total VT %` < quantile(`Total VT %`, probs = .90)) %>%
+  ggplot() + geom_point(aes(x = `Total Desired Amount`, y = `Total Payment Amount`, color = `Total VT %`)) + theme_classic() + geom_abline(slope = 1, intercept = 0, linetype = 'dashed', alpha = 0.5) + scale_color_gradient2(low = 'white', mid = ps_purple, high = 'orange', midpoint = 0.015) + theme(text = element_text(size = 15)) + labs(title = 'Course Level Actual vs. Desired Payment')
+```
+
+At first glance, this figure may be alarming due to the large number of courses located in the underpayment region, but upon closer examination using the view time % facet, its evident that the courses in the underpayment region are more often than not those with the smallest amounts of total view time, making it difficult to compensate them at or near the target level. This is a difficult paradox for the Author Compensation team, and one that continues to be evaluated in hopes of finding a scaleable solution. 
+
+### Total Payment Amounts
+
+The amount of real dollar savings achieved by the new model can be found comparing the total payment amount and the desired payment amounts over a two year period for the test set of courses:
+
+* The total amount of internally targeted payments for the test set of courses was **`r paste0('$', round(sum(rr_plotting$desired_compensation, na.rm = TRUE)/1000000, 2))`** million. 
+* The total amount of actual payments using the new algorithm's royalty rates was **`r paste0('$', round(sum(rr_plotting$actual_pmt, na.rm = TRUE)/1000000, 2))`** million.
+* Total Dollar Savings = **`r paste0('$', round(abs(round(sum(rr_plotting$desired_compensation, na.rm = TRUE), 2) - round(sum(rr_plotting$actual_pmt, na.rm = TRUE), 2))), 2)`**.
+  + This is an *overpayment* above the total target amounts for the test set of courses. While this initially may seem cost inefficient, previous models depicted overpayments in similar periods upwards of $14 million. This lowers the overpayment amount in half, while scaling the rates more appropriately across different areas of course performance. High earners and niche content authors alike are more fairly compensated under the new model.
